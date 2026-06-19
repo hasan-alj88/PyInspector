@@ -4,8 +4,15 @@ import click
 from rich.console import Console
 from rich.table import Table
 from ..env import temp_env
-from ..analyzer import analyze_package
-from ..viewer import render_rich_tree, export_json, export_yaml
+from ..analyzer import analyze_package, build_oop_graph
+from ..viewer import (
+    render_rich_tree,
+    export_json,
+    export_yaml,
+    render_oop_tree,
+    render_oop_mermaid,
+    render_oop_table
+)
 from ..comparer import compare_packages, render_comparison
 
 console = Console()
@@ -214,4 +221,52 @@ def compare(package_name, version_a, version_b, python):
         
     except Exception as e:
         console.print(f"[bold red]Error during version comparison: {e}[/bold red]")
+        sys.exit(1)
+
+@cli.command()
+@click.argument("package_spec")
+@click.option("--python", default=None, help="Python version to use (e.g., 3.10).")
+@click.option("--format", type=click.Choice(["tree", "mermaid", "table"]), default="tree", help="Visual format of OOP relationships.")
+@click.option("--include-external", is_flag=True, help="Include external parent classes.")
+@click.option("--no-composition", is_flag=True, help="Disable composition analysis.")
+def oop(package_spec, python, format, include_external, no_composition):
+    """
+    Map the OOP UML relationships (inheritance & composition) of a package.
+    
+    This command models classes starting from the root 'object' and shows
+    subclasses as tree nodes and composition as sub-elements.
+    """
+    try:
+        with console.status(f"[bold green]Setting up environment and analyzing {package_spec}...[/bold green]"):
+            with temp_env(package_spec, python_version=python) as modules:
+                if not modules:
+                    console.print(f"[bold red]Error: No modules could be resolved for package spec '{package_spec}'.[/bold red]")
+                    sys.exit(1)
+                
+                keys = list(modules.keys())
+                primary_mod = keys[0]
+                name_clean = package_spec.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
+                for k in keys:
+                    if k.lower() == name_clean:
+                        primary_mod = k
+                        break
+                        
+                pkg_path = modules[primary_mod]
+                pkg_info = analyze_package(primary_mod, pkg_path)
+                
+        # Build OOP graph
+        root_node = build_oop_graph(pkg_info, include_external=include_external)
+        
+        # Render output
+        show_composition = not no_composition
+        if format == "tree":
+            render_oop_tree(root_node, show_composition=show_composition)
+        elif format == "mermaid":
+            mermaid_str = render_oop_mermaid(root_node, show_composition=show_composition)
+            print(mermaid_str)
+        elif format == "table":
+            render_oop_table(root_node, show_composition=show_composition)
+            
+    except Exception as e:
+        console.print(f"[bold red]Error during OOP analysis: {e}[/bold red]")
         sys.exit(1)

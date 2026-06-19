@@ -2,9 +2,10 @@ import json
 import yaml
 from typing import Optional, Dict, Any
 from rich.tree import Tree
+from rich.table import Table
 from rich.text import Text
 from rich.console import Console
-from ..analyzer import PackageInfo, ModuleInfo, ClassInfo, FunctionInfo
+from ..analyzer import PackageInfo, ModuleInfo, ClassInfo, FunctionInfo, OOPClassNode
 
 def build_module_trie(pkg_info: PackageInfo) -> Dict[str, Any]:
     """Builds a hierarchical trie from module name dot-paths."""
@@ -189,3 +190,141 @@ def export_yaml(pkg_info: PackageInfo, show_private: bool = False) -> str:
     """Returns YAML representation of the package API."""
     data = package_to_dict(pkg_info, show_private)
     return yaml.dump(data, sort_keys=False)
+
+def render_oop_tree(root_node: OOPClassNode, show_composition: bool = True):
+    """Prints a beautiful colored ASCII tree of class inheritance and composition."""
+    console = Console()
+    
+    root_label = Text("Root ", style="dim white")
+    root_label.append(root_node.name, style="bold yellow")
+    tree = Tree(root_label)
+    
+    def add_node(oop_node: OOPClassNode, tree_node: Tree):
+        # Sort subclasses alphabetically by name
+        for sub in sorted(oop_node.subclasses, key=lambda x: x.name):
+            if sub.is_external:
+                label = Text("class ", style="bold magenta")
+                label.append(sub.name, style="italic dim yellow")
+                label.append(" (external)", style="dim white")
+            else:
+                label = Text("class ", style="bold magenta")
+                label.append(sub.name, style="bold cyan")
+                
+            branch = tree_node.add(label)
+            
+            # Add composition nodes if requested and present
+            if show_composition:
+                # Resolved composition
+                for attr in sorted(sub.resolved_composition.keys()):
+                    comp = sub.resolved_composition[attr]
+                    comp_label = Text("✦ composes ", style="dim green")
+                    comp_label.append(comp.name, style="bold cyan")
+                    comp_label.append(f" (as {attr})", style="dim white")
+                    branch.add(comp_label)
+                # External composition
+                for attr in sorted(sub.external_composition.keys()):
+                    ext_type = sub.external_composition[attr]
+                    clean_ext = ext_type.split(".")[-1]
+                    comp_label = Text("✦ composes ", style="dim green")
+                    comp_label.append(clean_ext, style="italic dim yellow")
+                    comp_label.append(f" (as {attr}, external)", style="dim white")
+                    branch.add(comp_label)
+            
+            # Recurse
+            add_node(sub, branch)
+            
+    add_node(root_node, tree)
+    console.print(tree)
+
+def render_oop_mermaid(root_node: OOPClassNode, show_composition: bool = True) -> str:
+    """Generates a Mermaid Class Diagram representing inheritance and composition."""
+    inheritance_lines = []
+    composition_lines = []
+    visited = set()
+    
+    def collect_relations(node: OOPClassNode):
+        if node.name in visited:
+            return
+        visited.add(node.name)
+        
+        # Sort subclasses to ensure deterministic output
+        for sub in sorted(node.subclasses, key=lambda x: x.name):
+            if node.name != "object":
+                inheritance_lines.append(f"    {node.name} <|-- {sub.name}")
+            collect_relations(sub)
+            
+        if show_composition:
+            for attr in sorted(node.resolved_composition.keys()):
+                comp = node.resolved_composition[attr]
+                composition_lines.append(f"    {node.name} *-- {comp.name} : {attr}")
+            for attr in sorted(node.external_composition.keys()):
+                ext_type = node.external_composition[attr]
+                clean_ext = ext_type.split(".")[-1]
+                composition_lines.append(f"    {node.name} *-- {clean_ext} : {attr}")
+                
+    collect_relations(root_node)
+    
+    lines = ["classDiagram"]
+    # Add inheritance lines, deduplicated
+    seen_inh = set()
+    for line in inheritance_lines:
+        if line not in seen_inh:
+            lines.append(line)
+            seen_inh.add(line)
+            
+    # Add composition lines, deduplicated
+    seen_comp = set()
+    for line in composition_lines:
+        if line not in seen_comp:
+            lines.append(line)
+            seen_comp.add(line)
+            
+    return "\n".join(lines)
+
+def render_oop_table(root_node: OOPClassNode, show_composition: bool = True):
+    """Prints a structured tabular report of the classes and their OOP relations."""
+    console = Console()
+    
+    table = Table(title="OOP Class Relationships Map", show_header=True, header_style="bold green")
+    table.add_column("Class Name", style="bold cyan")
+    table.add_column("Module Location", style="dim white")
+    table.add_column("Inherits From (Bases)", style="magenta")
+    if show_composition:
+        table.add_column("Composes Attributes", style="green")
+        
+    visited = set()
+    rows = []
+    
+    def collect_rows(node: OOPClassNode):
+        if node.name in visited:
+            return
+        visited.add(node.name)
+        
+        if not node.is_external and node.class_info:
+            bases_str = ", ".join(node.class_info.bases) if node.class_info.bases else "object"
+            
+            comp_list = []
+            if show_composition:
+                for attr, comp_node in sorted(node.resolved_composition.items()):
+                    comp_list.append(f"{attr}: {comp_node.name}")
+                for attr, ext_type in sorted(node.external_composition.items()):
+                    clean_ext = ext_type.split(".")[-1]
+                    comp_list.append(f"{attr}: {clean_ext}")
+                    
+            comp_str = ", ".join(comp_list) if comp_list else "-"
+            
+            rows.append((node.name, node.module, bases_str, comp_str))
+            
+        for sub in node.subclasses:
+            collect_rows(sub)
+            
+    collect_rows(root_node)
+    
+    # Sort table rows alphabetically by class name
+    for name, module, bases, comp in sorted(rows, key=lambda x: x[0]):
+        if show_composition:
+            table.add_row(name, module, bases, comp)
+        else:
+            table.add_row(name, module, bases)
+            
+    console.print(table)

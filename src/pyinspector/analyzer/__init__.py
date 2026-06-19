@@ -5,11 +5,14 @@ from .parser import (
     PackageInfo,
     analyze_package
 )
+from .oop import OOPClassNode, build_oop_graph
 
 __all__ = [
     "FunctionInfo",
     "ClassInfo",
     "ModuleInfo",
     "PackageInfo",
-    "analyze_package"
+    "analyze_package",
+    "OOPClassNode",
+    "build_oop_graph"
 ]

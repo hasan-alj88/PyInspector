@@ -12,6 +12,7 @@
 * **API Version Diffing**: Compare two versions of a package to see added, removed, or modified classes, methods, and functions, alongside their `requires-python` metadata.
 * **Symlink & Cycle Detection**: Traverses symlinks safely with canonical path tracking (`os.path.realpath`). Detects recursive loops or duplicate modules, short-circuiting traversal and labeling loops clearly in outputs.
 * **Visual ASCII Tree**: Prints gorgeous color-coded Unicode/ASCII trees of package APIs using `rich`. Also supports exports to **JSON** and **YAML**.
+* **OOP UML Relations Mapping**: Map inheritance and composition hierarchies starting from the root `object`, regardless of module file placement. Exports to ASCII tree, Mermaid class diagram, and Rich tables.
 
 ---
 
@@ -31,7 +32,7 @@ You can now run commands using `uv run pyinspector` or run the CLI globally by b
 
 ## 📖 CLI Command Manual
 
-PyInspector provides three primary commands: `inspect`, `search`, and `compare`.
+PyInspector provides four primary commands: `inspect`, `search`, `compare`, and `oop`.
 
 ### 1. `inspect`
 Statically inspects a package and visualizes its structure.
@@ -96,6 +97,27 @@ uv run pyinspector compare requests 2.31.0 2.32.0
 
 ---
 
+### 4. `oop`
+Maps class hierarchies and composition structures of a package under the root `object`.
+
+**Syntax**:
+```bash
+uv run pyinspector oop <package_spec> [options]
+```
+
+* **`package_spec`**: PyPI package name, version spec, or local folder path.
+* **`--python TEXT`**: Specific Python version constraint.
+* **`--format [tree|mermaid|table]`**: Visual representation mode (Default: `tree`).
+* **`--include-external`**: Includes external (e.g. standard library or third-party) base classes in the tree.
+* **`--no-composition`**: Excludes composition relationship markers/columns from the visual output.
+
+**Example**:
+```bash
+uv run pyinspector oop requests --format mermaid
+```
+
+---
+
 ## 💡 Practical Workflows & Examples
 
 ### A. Inspecting a Local Directory
@@ -136,7 +158,8 @@ src/pyinspector/
 │   ├── manager.py (manages temp directories, uv subprocesses, and cleans env vars)
 │   └── locate_helper.py (run inside subprocesses to find package installation locations)
 ├── analyzer/
-│   └── parser.py (handles AST parsing, unparsing parameter signatures, and docstrings)
+│   ├── parser.py (handles AST parsing, bases/composition extraction, and cycle detection)
+│   └── oop.py (structures class inheritance forest under 'object')
 ├── viewer/
 │   └── formatter.py (generates colored Rich Trees and exports data to JSON/YAML)
 ├── comparer/

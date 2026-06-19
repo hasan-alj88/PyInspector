@@ -114,5 +114,80 @@ class TestPyInspector(unittest.TestCase):
         finally:
             shutil.rmtree(temp_pkg, ignore_errors=True)
 
+    def test_oop_relations(self):
+        """Test build_oop_graph and oop CLI formatting (tree, mermaid, table) on local code."""
+        import tempfile
+        import shutil
+        from pyinspector.analyzer.parser import analyze_package
+        from pyinspector.analyzer.oop import build_oop_graph
+        
+        temp_pkg = tempfile.mkdtemp(prefix="pyinspector-test-oop-")
+        try:
+            # Create a simple python package with inheritance & composition inside a subdirectory
+            pkg_src_dir = os.path.join(temp_pkg, "ooppkg")
+            os.makedirs(pkg_src_dir)
+            with open(os.path.join(pkg_src_dir, "__init__.py"), "w") as f:
+                f.write("""
+class Animal:
+    pass
+
+class Dog(Animal):
+    pass
+
+class Owner:
+    def __init__(self):
+        self.pet = Dog()
+""")
+            with open(os.path.join(temp_pkg, "setup.py"), "w") as f:
+                f.write("""
+from setuptools import setup, find_packages
+setup(name='ooppkg', version='0.1.0', packages=find_packages())
+""")
+                
+            pkg_info = analyze_package("ooppkg", pkg_src_dir)
+            
+            # Build OOP graph
+            root_node = build_oop_graph(pkg_info, include_external=False)
+            
+            # object has subclasses Animal and Owner
+            self.assertEqual(root_node.name, "object")
+            sub_names = {s.name for s in root_node.subclasses}
+            self.assertIn("Animal", sub_names)
+            self.assertIn("Owner", sub_names)
+            
+            # Animal has subclass Dog
+            animal_node = next(s for s in root_node.subclasses if s.name == "Animal")
+            self.assertEqual(len(animal_node.subclasses), 1)
+            self.assertEqual(animal_node.subclasses[0].name, "Dog")
+            
+            # Owner has composition targeting Dog
+            owner_node = next(s for s in root_node.subclasses if s.name == "Owner")
+            self.assertIn("pet", owner_node.resolved_composition)
+            self.assertEqual(owner_node.resolved_composition["pet"].name, "Dog")
+            
+            # Test CLI invocations
+            # 1. tree
+            res_tree = self.runner.invoke(cli, ["oop", temp_pkg, "--format", "tree"])
+            self.assertEqual(res_tree.exit_code, 0)
+            self.assertIn("Animal", res_tree.output)
+            self.assertIn("Dog", res_tree.output)
+            self.assertIn("✦ composes Dog (as pet)", res_tree.output)
+            
+            # 2. mermaid
+            res_mermaid = self.runner.invoke(cli, ["oop", temp_pkg, "--format", "mermaid"])
+            self.assertEqual(res_mermaid.exit_code, 0)
+            self.assertIn("Animal <|-- Dog", res_mermaid.output)
+            self.assertIn("Owner *-- Dog : pet", res_mermaid.output)
+            
+            # 3. table
+            res_table = self.runner.invoke(cli, ["oop", temp_pkg, "--format", "table"])
+            self.assertEqual(res_table.exit_code, 0)
+            table_lines = res_table.output.splitlines()
+            self.assertTrue(any("Animal" in line and "object" in line for line in table_lines))
+            self.assertTrue(any("Owner" in line and "pet: Dog" in line for line in table_lines))
+            
+        finally:
+            shutil.rmtree(temp_pkg, ignore_errors=True)
+
 if __name__ == "__main__":
     unittest.main()

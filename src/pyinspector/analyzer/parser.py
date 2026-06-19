@@ -19,6 +19,8 @@ class ClassInfo:
     signature: str
     docstring: Optional[str]
     methods: List[FunctionInfo] = field(default_factory=list)
+    bases: List[str] = field(default_factory=list)
+    composes: Dict[str, str] = field(default_factory=dict)
 
 @dataclass
 class ModuleInfo:
@@ -61,6 +63,61 @@ def get_signature_class(node: ast.ClassDef) -> str:
     except Exception:
         return f"class {node.name}"
 
+def extract_composition(class_node: ast.ClassDef) -> Dict[str, str]:
+    """Statically identifies composed class types from variable annotations and assignments."""
+    composes = {}
+    
+    def get_type_name(expr_node) -> Optional[str]:
+        if isinstance(expr_node, ast.Name):
+            return expr_node.id
+        elif isinstance(expr_node, ast.Attribute):
+            return ast.unparse(expr_node)
+        elif isinstance(expr_node, ast.Subscript):
+            names = []
+            for sub in ast.walk(expr_node.slice):
+                if isinstance(sub, ast.Name):
+                    names.append(sub.id)
+                elif isinstance(sub, ast.Attribute):
+                    names.append(ast.unparse(sub))
+            if names:
+                return names[0]
+        return None
+
+    for child in class_node.body:
+        # Class-level annotations: e.g. adapter: HTTPAdapter
+        if isinstance(child, ast.AnnAssign):
+            if isinstance(child.target, ast.Name):
+                t_name = get_type_name(child.annotation)
+                if t_name:
+                    composes[child.target.id] = t_name
+                    
+        # Methods: scan constructor parameter annotations & instantiations
+        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for arg in child.args.args:
+                if arg.arg != "self" and arg.annotation:
+                    t_name = get_type_name(arg.annotation)
+                    if t_name:
+                        composes[arg.arg] = t_name
+                        
+            for sub_node in ast.walk(child):
+                # self.headers = CaseInsensitiveDict()
+                if isinstance(sub_node, ast.Assign):
+                    for target in sub_node.targets:
+                        if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self":
+                            if isinstance(sub_node.value, ast.Call):
+                                func_name = get_type_name(sub_node.value.func)
+                                if func_name:
+                                    composes[target.attr] = func_name
+                                    
+                # self.adapter: HTTPAdapter = ...
+                elif isinstance(sub_node, ast.AnnAssign):
+                    if isinstance(sub_node.target, ast.Attribute) and isinstance(sub_node.target.value, ast.Name) and sub_node.target.value.id == "self":
+                        t_name = get_type_name(sub_node.annotation)
+                        if t_name:
+                            composes[sub_node.target.attr] = t_name
+                            
+    return composes
+
 def parse_file(file_path: str, module_name: str) -> ModuleInfo:
     """Statically parses a single python file and extracts all its classes and functions."""
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -80,6 +137,8 @@ def parse_file(file_path: str, module_name: str) -> ModuleInfo:
             methods = []
             class_doc = ast.get_docstring(node)
             class_sig = get_signature_class(node)
+            bases = [ast.unparse(b) for b in node.bases]
+            composes = extract_composition(node)
             
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -98,7 +157,9 @@ def parse_file(file_path: str, module_name: str) -> ModuleInfo:
                 name=node.name,
                 signature=class_sig,
                 docstring=class_doc,
-                methods=methods
+                methods=methods,
+                bases=bases,
+                composes=composes
             ))
             
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
