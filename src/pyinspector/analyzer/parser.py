@@ -12,6 +12,8 @@ class FunctionInfo:
     docstring: Optional[str]
     is_async: bool
     is_method: bool = False
+    is_deprecated: bool = False
+    deprecation_reason: Optional[str] = None
 
 @dataclass
 class PropertyInfo:
@@ -199,6 +201,87 @@ def extract_properties(class_node: ast.ClassDef) -> List[PropertyInfo]:
         
     return properties
 
+def extract_deprecation_info(node: ast.FunctionDef | ast.AsyncFunctionDef, docstring: Optional[str]) -> tuple[bool, Optional[str]]:
+    """Statically checks decorators, function body warnings, and docstrings for deprecation warnings."""
+    is_deprecated = False
+    reason = None
+    
+    # 1. Inspect Decorators
+    if node.decorator_list:
+        for dec in node.decorator_list:
+            dec_name = ""
+            args = []
+            if isinstance(dec, ast.Name):
+                dec_name = dec.id
+            elif isinstance(dec, ast.Attribute):
+                dec_name = ast.unparse(dec)
+            elif isinstance(dec, ast.Call):
+                if isinstance(dec.func, ast.Name):
+                    dec_name = dec.func.id
+                elif isinstance(dec.func, ast.Attribute):
+                    dec_name = ast.unparse(dec.func)
+                for arg in dec.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        args.append(arg.value)
+                for kw in dec.keywords:
+                    if isinstance(kw.value, ast.Constant) and isinstance(kw.value, str):
+                        args.append(kw.value)
+            
+            dec_name_lower = dec_name.lower()
+            if "deprecated" in dec_name_lower or "warn" in dec_name_lower:
+                is_deprecated = True
+                if args:
+                    reason = args[0]
+                    break
+                    
+    # 2. Inspect Function Body for warnings.warn / warnings.warn_explicit
+    if not is_deprecated:
+        try:
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call):
+                    func_name = ast.unparse(child.func)
+                    if "warn" in func_name.lower():
+                        warn_args = []
+                        is_dep_warning = False
+                        for arg in child.args:
+                            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                                warn_args.append(arg.value)
+                            elif isinstance(arg, ast.Name) and "deprecation" in arg.id.lower():
+                                is_dep_warning = True
+                        for kw in child.keywords:
+                            if isinstance(kw.value, ast.Constant) and isinstance(kw.value, str):
+                                warn_args.append(kw.value)
+                            elif isinstance(kw.value, ast.Name) and "deprecation" in kw.value.id.lower():
+                                is_dep_warning = True
+                                
+                        if is_dep_warning or any("deprecated" in a.lower() or "deprecation" in a.lower() for a in warn_args):
+                            is_deprecated = True
+                            if warn_args:
+                                reason = warn_args[0]
+                            break
+        except Exception:
+            pass
+
+    # 3. Inspect Docstring
+    if docstring:
+        for line in docstring.splitlines():
+            line_strip = line.strip()
+            if "deprecated" in line_strip.lower() or "deprecation" in line_strip.lower():
+                is_deprecated = True
+                if not reason:
+                    reason_candidate = line_strip
+                    if reason_candidate.startswith(".. deprecated::"):
+                        reason_candidate = reason_candidate[15:].strip()
+                    elif reason_candidate.lower().startswith("deprecated:"):
+                        reason_candidate = reason_candidate[11:].strip()
+                    elif reason_candidate.lower().startswith("deprecated"):
+                        reason_candidate = reason_candidate[10:].strip()
+                    if reason_candidate:
+                        reason = reason_candidate
+                break
+                
+    return is_deprecated, reason
+
 def parse_file(file_path: str, module_name: str) -> ModuleInfo:
     """Statically parses a single python file and extracts all its classes and functions."""
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -227,12 +310,15 @@ def parse_file(file_path: str, module_name: str) -> ModuleInfo:
                     method_doc = ast.get_docstring(item)
                     method_sig = get_signature_func(item)
                     is_async = isinstance(item, ast.AsyncFunctionDef)
+                    is_dep, dep_reason = extract_deprecation_info(item, method_doc)
                     methods.append(FunctionInfo(
                         name=item.name,
                         signature=method_sig,
                         docstring=method_doc,
                         is_async=is_async,
-                        is_method=True
+                        is_method=True,
+                        is_deprecated=is_dep,
+                        deprecation_reason=dep_reason
                     ))
             
             classes.append(ClassInfo(
@@ -249,12 +335,15 @@ def parse_file(file_path: str, module_name: str) -> ModuleInfo:
             func_doc = ast.get_docstring(node)
             func_sig = get_signature_func(node)
             is_async = isinstance(node, ast.AsyncFunctionDef)
+            is_dep, dep_reason = extract_deprecation_info(node, func_doc)
             functions.append(FunctionInfo(
                 name=node.name,
                 signature=func_sig,
                 docstring=func_doc,
                 is_async=is_async,
-                is_method=False
+                is_method=False,
+                is_deprecated=is_dep,
+                deprecation_reason=dep_reason
             ))
             
     return ModuleInfo(

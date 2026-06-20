@@ -87,6 +87,9 @@ def add_trie_to_tree(
                         sig_suffix = sig_suffix[len(method.name):]
                         
                     method_label.append(sig_suffix, style="dim white")
+                    if getattr(method, "is_deprecated", False):
+                        reason_str = f": {method.deprecation_reason}" if getattr(method, "deprecation_reason", None) else ""
+                        method_label.append(f" ⚠️  (deprecated{reason_str})", style="italic yellow")
                     cls_branch.add(method_label)
                     
             # Render Functions
@@ -109,6 +112,9 @@ def add_trie_to_tree(
                     sig_suffix = sig_suffix[len(func.name):]
                     
                 func_label.append(sig_suffix, style="dim white")
+                if getattr(func, "is_deprecated", False):
+                    reason_str = f": {func.deprecation_reason}" if getattr(func, "deprecation_reason", None) else ""
+                    func_label.append(f" ⚠️  (deprecated{reason_str})", style="italic yellow")
                 branch.add(func_label)
                 
         add_trie_to_tree(sub_trie, branch, current_depth + 1, max_depth, show_private)
@@ -535,6 +541,9 @@ def add_functions_trie_to_tree(
                     sig_suffix = sig_suffix[len(func.name):]
                     
                 func_label.append(sig_suffix, style="dim white")
+                if getattr(func, "is_deprecated", False):
+                    reason_str = f": {func.deprecation_reason}" if getattr(func, "deprecation_reason", None) else ""
+                    func_label.append(f" ⚠️  (deprecated{reason_str})", style="italic yellow")
                 branch.add(func_label)
                 
         add_functions_trie_to_tree(sub_trie, branch, current_depth + 1, max_depth, show_private)

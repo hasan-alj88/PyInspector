@@ -389,5 +389,83 @@ version = "0.1.0"
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def test_function_deprecation(self):
+        """Test that deprecation is statically detected via decorators, body warning calls, and docstrings."""
+        import tempfile
+        import shutil
+        import io
+        from contextlib import redirect_stdout
+        from pyinspector.analyzer import analyze_package
+        from pyinspector.viewer import render_rich_tree
+
+        temp_pkg = tempfile.mkdtemp(prefix="pyinspector-test-deprecate-")
+        try:
+            # Create a module with various deprecation patterns
+            with open(os.path.join(temp_pkg, "dep_mod.py"), "w") as f:
+                f.write("""
+@deprecated("use new_f1")
+def f1():
+    pass
+
+def f2():
+    import warnings
+    warnings.warn("f2 is deprecated: use new_f2 instead", DeprecationWarning)
+
+def f3():
+    \"\"\"
+    A standard helper.
+    
+    Deprecated: use new_f3.
+    \"\"\"
+    pass
+
+class MyClass:
+    @custom_deprecated("class method deprecated")
+    def m1(self):
+        pass
+""")
+            pkg_info = analyze_package("testpkg", temp_pkg)
+            
+            # 1. Assert parser values
+            self.assertIn("testpkg.dep_mod", pkg_info.modules)
+            mod_info = pkg_info.modules["testpkg.dep_mod"]
+            
+            # Find functions
+            f1_info = next(f for f in mod_info.functions if f.name == "f1")
+            f2_info = next(f for f in mod_info.functions if f.name == "f2")
+            f3_info = next(f for f in mod_info.functions if f.name == "f3")
+            
+            # Verify f1 (decorator)
+            self.assertTrue(f1_info.is_deprecated)
+            self.assertEqual(f1_info.deprecation_reason, "use new_f1")
+            
+            # Verify f2 (body warning)
+            self.assertTrue(f2_info.is_deprecated)
+            self.assertEqual(f2_info.deprecation_reason, "f2 is deprecated: use new_f2 instead")
+            
+            # Verify f3 (docstring)
+            self.assertTrue(f3_info.is_deprecated)
+            self.assertEqual(f3_info.deprecation_reason, "use new_f3.")
+            
+            # Verify class method m1
+            cls_info = next(c for c in mod_info.classes if c.name == "MyClass")
+            m1_info = next(m for m in cls_info.methods if m.name == "m1")
+            self.assertTrue(m1_info.is_deprecated)
+            self.assertEqual(m1_info.deprecation_reason, "class method deprecated")
+            
+            # 2. Assert rich tree rendering contains warnings
+            f_out = io.StringIO()
+            with redirect_stdout(f_out):
+                render_rich_tree(pkg_info)
+            output = f_out.getvalue()
+            
+            self.assertIn("⚠️  (deprecated: use new_f1)", output)
+            self.assertIn("⚠️  (deprecated: f2 is deprecated: use new_f2 instead)", output)
+            self.assertIn("⚠️  (deprecated: use new_f3.)", output)
+            self.assertIn("⚠️  (deprecated: class method deprecated)", output)
+            
+        finally:
+            shutil.rmtree(temp_pkg, ignore_errors=True)
+
 if __name__ == "__main__":
     unittest.main()
