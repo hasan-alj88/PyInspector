@@ -32,7 +32,7 @@ You can now run commands using `uv run pyinspector` or run the CLI globally by b
 
 ## 📖 CLI Command Manual
 
-PyInspector provides four primary commands: `inspect`, `search`, `compare`, and `oop`.
+PyInspector provides five primary commands: `inspect`, `search`, `compare`, `oop`, and `functions`.
 
 ### 1. `inspect`
 Statically inspects a package and visualizes its structure.
@@ -118,6 +118,27 @@ uv run pyinspector oop <package_spec> [options]
 **Example**:
 ```bash
 uv run pyinspector oop requests --format mermaid
+```
+
+---
+
+### 5. `functions`
+Displays top-level (plain) functions and their signatures grouped by their module/file location in a clean, pruned hierarchical tree (modules without plain functions are pruned).
+
+**Syntax**:
+```bash
+uv run pyinspector functions <package_spec> [options]
+```
+
+* **`package_spec`**: PyPI package name, spec, or local directory path.
+* **`--python TEXT`**: Specific Python version constraint.
+* **`--private`**: Includes private functions (starting with `_`) in the tree.
+* **`--depth INTEGER`**: Restricts module recursion depth.
+* **`--no-build-isolation`**: Disables build isolation when installing local packages.
+
+**Example**:
+```bash
+uv run pyinspector functions requests --private
 ```
 
 ---

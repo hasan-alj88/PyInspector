@@ -448,3 +448,109 @@ def render_oop_table(root_node: OOPClassNode, show_composition: bool = True):
         table.add_row(name, module, bases, prop)
             
     console.print(table)
+
+
+def prune_trie_for_functions(trie_node: Dict[str, Any], show_private: bool) -> bool:
+    """
+    Recursively prunes the trie to keep only branches that contain plain functions.
+    Returns True if this node (or any descendant) contains at least one plain function.
+    """
+    has_functions = False
+    
+    # Check if this node itself is a module and has plain functions
+    if "__module_info__" in trie_node:
+        mod_info = trie_node["__module_info__"]
+        funcs = [f for f in mod_info.functions if show_private or not f.name.startswith("_")]
+        if funcs:
+            has_functions = True
+            
+    # Check descendants
+    keys_to_delete = []
+    for key, sub_trie in trie_node.items():
+        if key == "__module_info__":
+            continue
+        sub_has_funcs = prune_trie_for_functions(sub_trie, show_private)
+        if sub_has_funcs:
+            has_functions = True
+        else:
+            keys_to_delete.append(key)
+            
+    for key in keys_to_delete:
+        del trie_node[key]
+        
+    return has_functions
+
+
+def add_functions_trie_to_tree(
+    trie_node: Dict[str, Any],
+    tree_node: Tree,
+    current_depth: int,
+    max_depth: Optional[int],
+    show_private: bool
+):
+    """Recursively populates a Rich Tree from a module trie, rendering only plain functions."""
+    if max_depth is not None and current_depth > max_depth:
+        return
+        
+    for key in sorted(trie_node.keys()):
+        if key == "__module_info__":
+            continue
+            
+        sub_trie = trie_node[key]
+        mod_info: Optional[ModuleInfo] = sub_trie.get("__module_info__")
+        
+        if mod_info:
+            if mod_info.is_recursive:
+                label = Text(f"{key} (module -> loop/already explored: {mod_info.points_to})", style="italic dim yellow")
+            else:
+                label = Text(f"{key}", style="bold blue")
+                if mod_info.relative_path:
+                    label.append(f" ({mod_info.relative_path})", style="dim white")
+        else:
+            label = Text(f"{key}", style="dim blue")
+            
+        branch = tree_node.add(label)
+        
+        if mod_info and mod_info.is_recursive:
+            continue
+        
+        if mod_info:
+            # Render Functions
+            for func in mod_info.functions:
+                if not show_private and func.name.startswith("_"):
+                    continue
+                    
+                func_label = Text()
+                if func.is_async:
+                    func_label.append("async ", style="bold red")
+                func_label.append("def ", style="bold green")
+                func_label.append(func.name, style="bold white")
+                
+                sig_suffix = func.signature
+                if sig_suffix.startswith("def "):
+                    sig_suffix = sig_suffix[4:]
+                elif sig_suffix.startswith("async def "):
+                    sig_suffix = sig_suffix[10:]
+                if sig_suffix.startswith(func.name):
+                    sig_suffix = sig_suffix[len(func.name):]
+                    
+                func_label.append(sig_suffix, style="dim white")
+                branch.add(func_label)
+                
+        add_functions_trie_to_tree(sub_trie, branch, current_depth + 1, max_depth, show_private)
+
+
+def render_functions_tree(pkg_info: PackageInfo, show_private: bool = False, max_depth: Optional[int] = None):
+    """Prints a beautiful colored tree of only top-level functions grouped by module/file locations using Rich."""
+    console = Console()
+    
+    trie = build_module_trie(pkg_info)
+    prune_trie_for_functions(trie, show_private)
+    
+    root_label = Text(f"📦 {pkg_info.name}", style="bold yellow")
+    root_label.append(f" ({pkg_info.path})", style="dim white")
+    
+    tree = Tree(root_label)
+    add_functions_trie_to_tree(trie, tree, 1, max_depth, show_private)
+    
+    console.print(tree)

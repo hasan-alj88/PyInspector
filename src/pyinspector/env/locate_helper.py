@@ -3,6 +3,19 @@ import importlib.util
 import sys
 import os
 
+def is_std_library_module(mod_name, path_abs, package_spec):
+    if hasattr(sys, "stdlib_module_names") and mod_name in sys.stdlib_module_names:
+        import sysconfig
+        purelib = sysconfig.get_path('purelib')
+        platlib = sysconfig.get_path('platlib')
+        in_site_packages = path_abs.startswith(purelib) or path_abs.startswith(platlib)
+        in_local_spec = False
+        if os.path.exists(package_spec):
+            in_local_spec = path_abs.startswith(os.path.abspath(package_spec))
+        if not (in_site_packages or in_local_spec):
+            return True
+    return False
+
 def main():
     package_spec = sys.argv[1]
 
@@ -17,11 +30,19 @@ def main():
     # 1. Set up sys.path and collect local modules for local checkouts
     local_modules = []
     if os.path.isdir(package_spec):
-        if package_spec not in sys.path:
-            sys.path.insert(0, package_spec)
-        src_dir = os.path.join(package_spec, "src")
-        if os.path.isdir(src_dir) and src_dir not in sys.path:
-            sys.path.insert(0, src_dir)
+        package_spec = os.path.abspath(package_spec)
+        # If the directory itself contains __init__.py, it is the package
+        if os.path.exists(os.path.join(package_spec, "__init__.py")):
+            parent_dir = os.path.dirname(package_spec)
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            local_modules.append(clean_name)
+        else:
+            if package_spec not in sys.path:
+                sys.path.insert(0, package_spec)
+            src_dir = os.path.join(package_spec, "src")
+            if os.path.isdir(src_dir) and src_dir not in sys.path:
+                sys.path.insert(0, src_dir)
 
         # Scan root of package_spec for subdirectories with __init__.py or standalone python modules
         try:
@@ -94,7 +115,18 @@ def main():
     else:
         if local_modules:
             modules.extend(local_modules)
-        modules.append(clean_name)
+        # Only append clean_name if it is not a local directory,
+        # or if it exists as an actual module/folder inside package_spec
+        if not os.path.exists(package_spec):
+            modules.append(clean_name)
+        else:
+            is_valid_local = (
+                os.path.exists(os.path.join(package_spec, clean_name)) or
+                os.path.exists(os.path.join(package_spec, clean_name + ".py")) or
+                os.path.exists(os.path.join(package_spec, "__init__.py"))
+            )
+            if is_valid_local:
+                modules.append(clean_name)
 
     modules = list(set(modules))
 
@@ -106,17 +138,22 @@ def main():
             if spec:
                 path = spec.submodule_search_locations[0] if spec.submodule_search_locations else spec.origin
                 if path:
-                    results.append((mod_import_name, os.path.abspath(path)))
+                    path_abs = os.path.abspath(path)
+                    if not is_std_library_module(mod_import_name, path_abs, package_spec):
+                        results.append((mod_import_name, path_abs))
         except Exception:
             pass
 
     if not results:
         try:
-            spec = importlib.util.find_spec(clean_name.replace('-', '_'))
+            fallback_name = clean_name.replace('-', '_')
+            spec = importlib.util.find_spec(fallback_name)
             if spec:
                 path = spec.submodule_search_locations[0] if spec.submodule_search_locations else spec.origin
                 if path:
-                    results.append((clean_name.replace('-', '_'), os.path.abspath(path)))
+                    path_abs = os.path.abspath(path)
+                    if not is_std_library_module(fallback_name, path_abs, package_spec):
+                        results.append((fallback_name, path_abs))
         except Exception:
             pass
 

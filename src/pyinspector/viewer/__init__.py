@@ -4,7 +4,8 @@ from .formatter import (
     export_yaml,
     render_oop_tree,
     render_oop_mermaid,
-    render_oop_table
+    render_oop_table,
+    render_functions_tree
 )
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "export_yaml",
     "render_oop_tree",
     "render_oop_mermaid",
-    "render_oop_table"
+    "render_oop_table",
+    "render_functions_tree"
 ]

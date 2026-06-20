@@ -11,7 +11,8 @@ from ..viewer import (
     export_yaml,
     render_oop_tree,
     render_oop_mermaid,
-    render_oop_table
+    render_oop_table,
+    render_functions_tree
 )
 from ..comparer import compare_packages, render_comparison
 
@@ -55,7 +56,8 @@ def inspect(package_spec, python, version, format, output, private, depth, no_bu
                 
                 keys = list(modules.keys())
                 primary_mod = keys[0]
-                name_clean = package_spec.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
+                spec_clean = os.path.basename(os.path.abspath(package_spec)) if os.path.exists(package_spec) else package_spec
+                name_clean = spec_clean.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
                 for k in keys:
                     if k.lower() == name_clean:
                         primary_mod = k
@@ -109,7 +111,8 @@ def search(package_spec, query, python, private, no_build_isolation):
                 
                 keys = list(modules.keys())
                 primary_mod = keys[0]
-                name_clean = package_spec.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
+                spec_clean = os.path.basename(os.path.abspath(package_spec)) if os.path.exists(package_spec) else package_spec
+                name_clean = spec_clean.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
                 for k in keys:
                     if k.lower() == name_clean:
                         primary_mod = k
@@ -249,7 +252,8 @@ def oop(package_spec, python, format, include_external, no_composition, no_build
                 
                 keys = list(modules.keys())
                 primary_mod = keys[0]
-                name_clean = package_spec.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
+                spec_clean = os.path.basename(os.path.abspath(package_spec)) if os.path.exists(package_spec) else package_spec
+                name_clean = spec_clean.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
                 for k in keys:
                     if k.lower() == name_clean:
                         primary_mod = k
@@ -273,4 +277,41 @@ def oop(package_spec, python, format, include_external, no_composition, no_build
             
     except Exception as e:
         console.print(f"[bold red]Error during OOP analysis: {e}[/bold red]")
+        sys.exit(1)
+
+@cli.command()
+@click.argument("package_spec")
+@click.option("--python", default=None, help="Python version to use (e.g., 3.10).")
+@click.option("--private", is_flag=True, help="Include private functions starting with '_'.")
+@click.option("--depth", type=int, default=None, help="Limit tree rendering depth.")
+@click.option("--no-build-isolation", is_flag=True, help="Disable build isolation when installing local packages.")
+def functions(package_spec, python, private, depth, no_build_isolation):
+    """
+    Display plain top-level functions and their signatures in their file locations.
+    
+    PACKAGE_SPEC can be a PyPI package or local path.
+    """
+    try:
+        with console.status(f"[bold green]Setting up environment and analyzing {package_spec}...[/bold green]"):
+            with temp_env(package_spec, python_version=python, no_build_isolation=no_build_isolation) as modules:
+                if not modules:
+                    console.print(f"[bold red]Error: No modules could be resolved for package spec '{package_spec}'.[/bold red]")
+                    sys.exit(1)
+                
+                keys = list(modules.keys())
+                primary_mod = keys[0]
+                spec_clean = os.path.basename(os.path.abspath(package_spec)) if os.path.exists(package_spec) else package_spec
+                name_clean = spec_clean.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
+                for k in keys:
+                    if k.lower() == name_clean:
+                        primary_mod = k
+                        break
+                        
+                pkg_path = modules[primary_mod]
+                pkg_info = analyze_package(primary_mod, pkg_path)
+                
+        render_functions_tree(pkg_info, show_private=private, max_depth=depth)
+            
+    except Exception as e:
+        console.print(f"[bold red]Error during functions exploration: {e}[/bold red]")
         sys.exit(1)

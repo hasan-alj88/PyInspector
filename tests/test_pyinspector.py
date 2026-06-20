@@ -302,5 +302,92 @@ class MyClass:
         finally:
             shutil.rmtree(temp_pkg, ignore_errors=True)
 
+    def test_functions_explorer(self):
+        """Test that the functions explorer properly renders and prunes the module tree."""
+        import tempfile
+        import shutil
+        import io
+        from contextlib import redirect_stdout
+        from pyinspector.analyzer import analyze_package
+        from pyinspector.viewer import render_functions_tree
+
+        temp_pkg = tempfile.mkdtemp(prefix="pyinspector-test-functions-")
+        try:
+            # 1. Create package structure
+            # module_a.py has top-level function and class
+            with open(os.path.join(temp_pkg, "module_a.py"), "w") as f:
+                f.write("def hello(name: str) -> None:\n    pass\n\nclass MyClass:\n    def method(self):\n        pass\n")
+
+            # module_b.py has only class (should be pruned)
+            with open(os.path.join(temp_pkg, "module_b.py"), "w") as f:
+                f.write("class EmptyClass:\n    pass\n")
+
+            # subpkg/module_c.py has top-level function
+            os.makedirs(os.path.join(temp_pkg, "subpkg"))
+            with open(os.path.join(temp_pkg, "subpkg", "__init__.py"), "w") as f:
+                f.write("# init\n")
+            with open(os.path.join(temp_pkg, "subpkg", "module_c.py"), "w") as f:
+                f.write("def nested_func(x: int) -> int:\n    return x\n")
+
+            # 2. Analyze the package
+            pkg_info = analyze_package("testpkg", temp_pkg)
+
+            # 3. Capture output of render_functions_tree
+            f_out = io.StringIO()
+            with redirect_stdout(f_out):
+                render_functions_tree(pkg_info)
+            output = f_out.getvalue()
+
+            # 4. Assertions
+            # hello and nested_func should be present
+            self.assertIn("hello", output)
+            self.assertIn("nested_func", output)
+            # File paths should be displayed
+            self.assertIn("module_a.py", output)
+            self.assertIn("module_c.py", output)
+            # MyClass and EmptyClass/module_b should NOT be present (pruned)
+            self.assertNotIn("MyClass", output)
+            self.assertNotIn("EmptyClass", output)
+            self.assertNotIn("module_b", output)
+            
+        finally:
+            shutil.rmtree(temp_pkg, ignore_errors=True)
+
+    def test_stdlib_import_shadowing(self):
+        """Test that local directory paths that match stdlib module names (like 'code') do not resolve to stdlib."""
+        import tempfile
+        import shutil
+        from pyinspector.env import temp_env
+        
+        # Create a temp directory
+        temp_dir = tempfile.mkdtemp()
+        try:
+            # Create a folder named 'code' inside it
+            code_dir = os.path.join(temp_dir, "code")
+            os.makedirs(code_dir)
+            
+            # Create a minimal pyproject.toml
+            with open(os.path.join(code_dir, "pyproject.toml"), "w") as f:
+                f.write("""[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code"
+version = "0.1.0"
+""")
+            
+            # Add a valid local module 'real_module' inside 'code' directory
+            os.makedirs(os.path.join(code_dir, "real_module"))
+            with open(os.path.join(code_dir, "real_module", "__init__.py"), "w") as f:
+                f.write("X = 1\n")
+                
+            with temp_env(code_dir) as modules:
+                # 'real_module' should be found, but stdlib 'code' should NOT be in modules
+                self.assertIn("real_module", modules)
+                self.assertNotIn("code", modules)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 if __name__ == "__main__":
     unittest.main()
