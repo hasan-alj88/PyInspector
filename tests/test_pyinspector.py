@@ -467,5 +467,99 @@ class MyClass:
         finally:
             shutil.rmtree(temp_pkg, ignore_errors=True)
 
+    def test_init_config_warnings(self):
+        """Test that unexposed classes/functions and items missing from __all__ are correctly detected and printed with warnings."""
+        import tempfile
+        import shutil
+        import io
+        from contextlib import redirect_stdout
+        from pyinspector.analyzer.parser import analyze_package
+        from pyinspector.viewer import render_rich_tree
+
+        temp_pkg = tempfile.mkdtemp(prefix="pyinspector-test-initcheck-")
+        try:
+            # Create root __init__.py
+            with open(os.path.join(temp_pkg, "__init__.py"), "w") as f:
+                f.write("# root package\n")
+
+            # 1. Test explicit imports in subpackage
+            os.makedirs(os.path.join(temp_pkg, "sub"))
+            with open(os.path.join(temp_pkg, "sub", "__init__.py"), "w") as f:
+                f.write("""
+from .module import ExposedClass, exposed_func
+__all__ = ["exposed_func"]
+""")
+            with open(os.path.join(temp_pkg, "sub", "module.py"), "w") as f:
+                f.write("""
+class ExposedClass:
+    pass
+
+class UnexposedClass:
+    pass
+
+def exposed_func():
+    pass
+
+def unexposed_func():
+    pass
+""")
+
+            # 2. Test star imports in subpackage sub2
+            os.makedirs(os.path.join(temp_pkg, "sub2"))
+            with open(os.path.join(temp_pkg, "sub2", "__init__.py"), "w") as f:
+                f.write("""
+from .module2 import *
+__all__ = []
+""")
+            with open(os.path.join(temp_pkg, "sub2", "module2.py"), "w") as f:
+                f.write("""
+class StarClass:
+    pass
+""")
+            
+            pkg_info = analyze_package("testpkg", temp_pkg)
+            
+            # Retrieve submodules and classes/functions
+            sub_mod = pkg_info.modules.get("testpkg.sub.module")
+            self.assertIsNotNone(sub_mod)
+            
+            exposed_cls = next(c for c in sub_mod.classes if c.name == "ExposedClass")
+            unexposed_cls = next(c for c in sub_mod.classes if c.name == "UnexposedClass")
+            exposed_fn = next(f for f in sub_mod.functions if f.name == "exposed_func")
+            unexposed_fn = next(f for f in sub_mod.functions if f.name == "unexposed_func")
+            
+            # Assert exposure flags
+            self.assertFalse(exposed_cls.is_unexposed)
+            self.assertTrue(unexposed_cls.is_unexposed)
+            self.assertFalse(exposed_fn.is_unexposed)
+            self.assertTrue(unexposed_fn.is_unexposed)
+            
+            # Assert missing from __all__ flags
+            self.assertTrue(exposed_cls.missing_from_all)
+            self.assertFalse(exposed_fn.missing_from_all)
+            
+            # Retrieve star imported module and class
+            sub2_mod = pkg_info.modules.get("testpkg.sub2.module2")
+            self.assertIsNotNone(sub2_mod)
+            star_cls = next(c for c in sub2_mod.classes if c.name == "StarClass")
+            
+            # StarClass should be exposed (not unexposed) and missing from __all__ (since __all__ = [])
+            self.assertFalse(star_cls.is_unexposed)
+            self.assertTrue(star_cls.missing_from_all)
+            
+            # Assert rich tree output contains warning labels
+            f_out = io.StringIO()
+            with redirect_stdout(f_out):
+                render_rich_tree(pkg_info)
+            output = f_out.getvalue()
+            
+            self.assertIn("UnexposedClass ⚠️  (unexposed)", output)
+            self.assertIn("unexposed_func() ⚠️  (unexposed)", output)
+            self.assertIn("ExposedClass ⚠️  (missing from __all__)", output)
+            self.assertIn("StarClass ⚠️  (missing from __all__)", output)
+            
+        finally:
+            shutil.rmtree(temp_pkg, ignore_errors=True)
+
 if __name__ == "__main__":
     unittest.main()

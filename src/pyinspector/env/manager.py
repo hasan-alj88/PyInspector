@@ -3,6 +3,7 @@ import sys
 import subprocess
 import tempfile
 import shutil
+from pathlib import Path
 from contextlib import contextmanager
 from typing import Dict
 
@@ -17,15 +18,16 @@ def temp_env(package_spec: str, python_version: str = None, no_build_isolation: 
     5. Yields a dictionary mapping module name to absolute file system path.
     6. Cleans up the temporary directory.
     """
+    pkg_path = Path(package_spec)
     # Check for existing local .venv first to reuse it
-    if os.path.isdir(package_spec):
-        local_venv = os.path.join(package_spec, ".venv")
-        python_exe = os.path.join(local_venv, "bin", "python")
-        if not os.path.exists(python_exe):
-            python_exe = os.path.join(local_venv, "Scripts", "python.exe")
+    if pkg_path.is_dir():
+        local_venv = pkg_path / ".venv"
+        python_exe = local_venv / "bin" / "python"
+        if not python_exe.exists():
+            python_exe = local_venv / "Scripts" / "python.exe"
             
-        if os.path.exists(python_exe):
-            helper_path = os.path.join(os.path.dirname(__file__), "locate_helper.py")
+        if python_exe.exists():
+            helper_path = Path(__file__).parent / "locate_helper.py"
             with open(helper_path, "r", encoding="utf-8") as f:
                 helper_code = f.read()
                 
@@ -35,8 +37,8 @@ def temp_env(package_spec: str, python_version: str = None, no_build_isolation: 
             clean_env.pop("CONDA_PREFIX", None)
             
             res = subprocess.run(
-                [python_exe, "-c", helper_code, package_spec],
-                cwd=package_spec,
+                [str(python_exe), "-c", helper_code, str(pkg_path.resolve())],
+                cwd=str(pkg_path),
                 capture_output=True,
                 text=True,
                 check=True,
@@ -70,34 +72,34 @@ def temp_env(package_spec: str, python_version: str = None, no_build_isolation: 
             raise RuntimeError(f"Failed to initialize virtualenv:\n{res_venv.stderr.strip()}")
         
         # Determine path to python executable
-        python_exe = os.path.join(temp_dir, ".venv", "bin", "python")
-        if not os.path.exists(python_exe):
-            python_exe = os.path.join(temp_dir, ".venv", "Scripts", "python.exe")
+        temp_dir_path = Path(temp_dir)
+        python_exe = temp_dir_path / ".venv" / "bin" / "python"
+        if not python_exe.exists():
+            python_exe = temp_dir_path / ".venv" / "Scripts" / "python.exe"
             
-        if not os.path.exists(python_exe):
+        if not python_exe.exists():
             raise FileNotFoundError(f"Python executable not found in virtual environment at {temp_dir}")
             
         # 2. Install the package
-        if os.path.exists(package_spec):
-            package_spec = os.path.abspath(package_spec)
+        pkg_spec_str = str(pkg_path.resolve()) if pkg_path.exists() else package_spec
             
-        install_cmd = ["uv", "pip", "install", "--python", python_exe, "--no-deps"]
+        install_cmd = ["uv", "pip", "install", "--python", str(python_exe), "--no-deps"]
         if no_build_isolation:
             install_cmd.append("--no-build-isolation")
-        install_cmd.append(package_spec)
+        install_cmd.append(pkg_spec_str)
         
         res_install = subprocess.run(install_cmd, cwd=temp_dir, capture_output=True, text=True, env=clean_env)
         if res_install.returncode != 0:
             raise RuntimeError(f"Installation failed:\n{res_install.stderr.strip()}")
         
         # 3. Read the helper code from locate_helper.py dynamically
-        helper_path = os.path.join(os.path.dirname(__file__), "locate_helper.py")
+        helper_path = Path(__file__).parent / "locate_helper.py"
         with open(helper_path, "r", encoding="utf-8") as f:
             helper_code = f.read()
             
         # Run helper script in venv
         res = subprocess.run(
-            [python_exe, "-c", helper_code, package_spec],
+            [str(python_exe), "-c", helper_code, pkg_spec_str],
             cwd=temp_dir,
             capture_output=True,
             text=True,

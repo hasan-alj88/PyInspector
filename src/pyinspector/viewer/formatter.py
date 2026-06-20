@@ -65,6 +65,11 @@ def add_trie_to_tree(
                     sig_suffix = sig_suffix[len(f"class {cls.name}"):]
                 cls_label.append(sig_suffix, style="italic dim white")
                 
+                if getattr(cls, "is_unexposed", False):
+                    cls_label.append(" ⚠️  (unexposed)", style="italic yellow")
+                elif getattr(cls, "missing_from_all", False):
+                    cls_label.append(" ⚠️  (missing from __all__)", style="italic yellow")
+                
                 cls_branch = branch.add(cls_label)
                 
                 # Render Methods
@@ -115,6 +120,10 @@ def add_trie_to_tree(
                 if getattr(func, "is_deprecated", False):
                     reason_str = f": {func.deprecation_reason}" if getattr(func, "deprecation_reason", None) else ""
                     func_label.append(f" ⚠️  (deprecated{reason_str})", style="italic yellow")
+                if getattr(func, "is_unexposed", False):
+                    func_label.append(" ⚠️  (unexposed)", style="italic yellow")
+                elif getattr(func, "missing_from_all", False):
+                    func_label.append(" ⚠️  (missing from __all__)", style="italic yellow")
                 branch.add(func_label)
                 
         add_trie_to_tree(sub_trie, branch, current_depth + 1, max_depth, show_private)
@@ -544,6 +553,10 @@ def add_functions_trie_to_tree(
                 if getattr(func, "is_deprecated", False):
                     reason_str = f": {func.deprecation_reason}" if getattr(func, "deprecation_reason", None) else ""
                     func_label.append(f" ⚠️  (deprecated{reason_str})", style="italic yellow")
+                if getattr(func, "is_unexposed", False):
+                    func_label.append(" ⚠️  (unexposed)", style="italic yellow")
+                elif getattr(func, "missing_from_all", False):
+                    func_label.append(" ⚠️  (missing from __all__)", style="italic yellow")
                 branch.add(func_label)
                 
         add_functions_trie_to_tree(sub_trie, branch, current_depth + 1, max_depth, show_private)

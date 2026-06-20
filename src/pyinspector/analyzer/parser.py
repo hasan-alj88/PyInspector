@@ -2,6 +2,7 @@ import os
 import ast
 import copy
 import sys
+from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -14,6 +15,8 @@ class FunctionInfo:
     is_method: bool = False
     is_deprecated: bool = False
     deprecation_reason: Optional[str] = None
+    is_unexposed: bool = False
+    missing_from_all: bool = False
 
 @dataclass
 class PropertyInfo:
@@ -30,6 +33,8 @@ class ClassInfo:
     bases: List[str] = field(default_factory=list)
     composes: Dict[str, str] = field(default_factory=dict)
     properties: List[PropertyInfo] = field(default_factory=list)
+    is_unexposed: bool = False
+    missing_from_all: bool = False
 
 @dataclass
 class ModuleInfo:
@@ -39,6 +44,9 @@ class ModuleInfo:
     functions: List[FunctionInfo] = field(default_factory=list)
     is_recursive: bool = False
     points_to: Optional[str] = None
+    imported_names: Dict[str, tuple[Optional[str], str]] = field(default_factory=dict)
+    declared_all: Optional[List[str]] = None
+    star_imports: List[str] = field(default_factory=list)
 
 @dataclass
 class PackageInfo:
@@ -266,7 +274,13 @@ def extract_deprecation_info(node: ast.FunctionDef | ast.AsyncFunctionDef, docst
     if docstring:
         for line in docstring.splitlines():
             line_strip = line.strip()
-            if "deprecated" in line_strip.lower() or "deprecation" in line_strip.lower():
+            line_lower = line_strip.lower()
+            is_dep_line = (
+                line_lower.startswith("deprecated") or
+                line_strip.startswith(".. deprecated::") or
+                "@deprecated" in line_strip
+            )
+            if is_dep_line:
                 is_deprecated = True
                 if not reason:
                     reason_candidate = line_strip
@@ -295,6 +309,9 @@ def parse_file(file_path: str, module_name: str) -> ModuleInfo:
         
     classes = []
     functions = []
+    imported_names = {}
+    declared_all = None
+    star_imports = []
     
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
@@ -346,59 +363,96 @@ def parse_file(file_path: str, module_name: str) -> ModuleInfo:
                 deprecation_reason=dep_reason
             ))
             
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                exposed = alias.asname or alias.name
+                imported_names[exposed] = (None, alias.name)
+                
+        elif isinstance(node, ast.ImportFrom):
+            module_src = ""
+            if node.level > 0:
+                module_src = "." * node.level
+            if node.module:
+                module_src += node.module
+            for alias in node.names:
+                if alias.name == "*":
+                    star_imports.append(module_src)
+                else:
+                    exposed = alias.asname or alias.name
+                    imported_names[exposed] = (module_src, alias.name)
+                
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "__all__":
+                    if isinstance(node.value, (ast.List, ast.Tuple)):
+                        declared_all = []
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                declared_all.append(elt.value)
+                            elif isinstance(elt, ast.Name):
+                                declared_all.append(elt.id)
+            
     return ModuleInfo(
         name=module_name,
         relative_path=file_path,
         classes=classes,
-        functions=functions
+        functions=functions,
+        imported_names=imported_names,
+        declared_all=declared_all,
+        star_imports=star_imports
     )
 
 def analyze_package(package_name: str, package_path: str) -> PackageInfo:
     """Recursively scans a package directory or file and constructs a PackageInfo tree, detecting circular loops."""
-    pkg = PackageInfo(name=package_name, path=package_path)
+    pkg_path = Path(package_path)
+    pkg = PackageInfo(name=package_name, path=str(pkg_path))
     
     # Track visited paths: realpath -> module_name
     visited_paths = {}
     
-    def get_module_name(target_path):
-        parent_dir = os.path.dirname(package_path)
-        if not parent_dir:
-            parent_dir = "."
-        rel_path = os.path.relpath(target_path, parent_dir)
-        parts = os.path.splitext(rel_path)[0].split(os.sep)
+    parent_dir = pkg_path.parent
+    
+    def get_module_name(target_path: Path) -> str:
+        try:
+            rel_path = target_path.relative_to(parent_dir)
+        except ValueError:
+            rel_path = target_path
+            
+        parts = list(rel_path.with_suffix("").parts)
         if parts and parts[-1] == "__init__":
             parts.pop()
         if parts:
             parts[0] = package_name
         return ".".join(parts)
 
-    if os.path.isfile(package_path):
-        if package_path.endswith((".py", ".pyi")):
-            canonical_path = os.path.realpath(package_path)
+    if pkg_path.is_file():
+        if pkg_path.suffix in (".py", ".pyi"):
+            canonical_path = str(pkg_path.resolve())
             visited_paths[canonical_path] = package_name
-            mod_info = parse_file(package_path, package_name)
-            mod_info.relative_path = os.path.basename(package_path)
+            mod_info = parse_file(str(pkg_path), package_name)
+            mod_info.relative_path = pkg_path.name
             pkg.modules[package_name] = mod_info
             
-    elif os.path.isdir(package_path):
-        visited_paths[os.path.realpath(package_path)] = package_name
+    elif pkg_path.is_dir():
+        visited_paths[str(pkg_path.resolve())] = package_name
         candidate_files = {}
         
-        for root, dirs, files in os.walk(package_path, followlinks=True):
+        for root, dirs, files in os.walk(str(pkg_path), followlinks=True):
+            root_path = Path(root)
             # 1. Clean directories & check for folder loops
             remaining_dirs = []
             for d in dirs:
                 if d.startswith(".") or d == "__pycache__":
                     continue
-                dir_path = os.path.join(root, d)
-                canonical_dir = os.path.realpath(dir_path)
+                dir_path = root_path / d
+                canonical_dir = str(dir_path.resolve())
                 
                 if canonical_dir in visited_paths:
                     loop_mod_name = get_module_name(dir_path)
                     if loop_mod_name:
                         pkg.modules[loop_mod_name] = ModuleInfo(
                             name=loop_mod_name,
-                            relative_path=os.path.relpath(dir_path, package_path),
+                            relative_path=str(dir_path.relative_to(pkg_path)),
                             is_recursive=True,
                             points_to=visited_paths[canonical_dir]
                         )
@@ -412,7 +466,7 @@ def analyze_package(package_name: str, package_path: str) -> PackageInfo:
             # 2. Collect candidate files
             for file in files:
                 if file.endswith((".py", ".pyi")):
-                    full_path = os.path.join(root, file)
+                    full_path = root_path / file
                     file_mod_name = get_module_name(full_path)
                     if not file_mod_name:
                         continue
@@ -421,23 +475,124 @@ def analyze_package(package_name: str, package_path: str) -> PackageInfo:
                         candidate_files[file_mod_name] = full_path
                     else:
                         existing_path = candidate_files[file_mod_name]
-                        if file.endswith(".pyi") and existing_path.endswith(".py"):
+                        if file.endswith(".pyi") and existing_path.name.endswith(".py"):
                             candidate_files[file_mod_name] = full_path
 
         # 3. Process candidate files
         for file_mod_name, full_path in sorted(candidate_files.items()):
-            canonical_file = os.path.realpath(full_path)
+            canonical_file = str(full_path.resolve())
             if canonical_file in visited_paths:
                 pkg.modules[file_mod_name] = ModuleInfo(
                     name=file_mod_name,
-                    relative_path=os.path.relpath(full_path, package_path),
+                    relative_path=str(full_path.relative_to(pkg_path)),
                     is_recursive=True,
                     points_to=visited_paths[canonical_file]
                 )
             else:
                 visited_paths[canonical_file] = file_mod_name
-                mod_info = parse_file(full_path, file_mod_name)
-                mod_info.relative_path = os.path.relpath(full_path, package_path)
+                mod_info = parse_file(str(full_path), file_mod_name)
+                mod_info.relative_path = str(full_path.relative_to(pkg_path))
                 pkg.modules[file_mod_name] = mod_info
                         
+    check_api_exposure(pkg)
     return pkg
+
+def check_api_exposure(pkg: PackageInfo):
+    """Post-processes the package to detect unexposed API items and missing __all__ exports."""
+    def resolve_module_name(parent_name: str, module_src: Optional[str]) -> str:
+        if not module_src:
+            return ""
+        if module_src.startswith("."):
+            level = 0
+            for char in module_src:
+                if char == '.':
+                    level += 1
+                else:
+                    break
+            sub_name = module_src[level:]
+            parts = parent_name.split(".")
+            if level > len(parts):
+                return sub_name
+            base_parts = parts[:len(parts) - (level - 1)]
+            if sub_name:
+                return ".".join(base_parts + [sub_name])
+            else:
+                return ".".join(base_parts)
+        else:
+            return module_src
+
+    for mod_name, mod in pkg.modules.items():
+        # First, check items defined directly in this module for missing_from_all if it has __all__
+        if mod.declared_all is not None:
+            for c in mod.classes:
+                if not c.name.startswith("_"):
+                    if c.name not in mod.declared_all:
+                        c.missing_from_all = True
+            for f in mod.functions:
+                if not f.name.startswith("_"):
+                    if f.name not in mod.declared_all:
+                        f.missing_from_all = True
+
+        # Now, if it's a submodule, check exposure in its parent __init__.py
+        if "." in mod_name:
+            parts = mod_name.split(".")
+            parent_name = ".".join(parts[:-1])
+            parent_mod = pkg.modules.get(parent_name)
+            if parent_mod is not None:
+                # Check classes
+                for c in mod.classes:
+                    if c.name.startswith("_"):
+                        continue
+                    
+                    is_star_imported = any(
+                        resolve_module_name(parent_mod.name, src) == mod_name
+                        for src in parent_mod.star_imports
+                    )
+                    
+                    explicit_exposed_names = [
+                        exp_name
+                        for exp_name, (src, orig) in parent_mod.imported_names.items()
+                        if resolve_module_name(parent_mod.name, src) == mod_name and orig == c.name
+                    ]
+                    
+                    if not is_star_imported and not explicit_exposed_names:
+                        c.is_unexposed = True
+                    else:
+                        c.is_unexposed = False
+                        if parent_mod.declared_all is not None:
+                            exposed_names = []
+                            if is_star_imported:
+                                exposed_names.append(c.name)
+                            exposed_names.extend(explicit_exposed_names)
+                            
+                            if not any(name in parent_mod.declared_all for name in exposed_names):
+                                c.missing_from_all = True
+                                
+                # Check functions
+                for f in mod.functions:
+                    if f.name.startswith("_"):
+                        continue
+                    
+                    is_star_imported = any(
+                        resolve_module_name(parent_mod.name, src) == mod_name
+                        for src in parent_mod.star_imports
+                    )
+                    
+                    explicit_exposed_names = [
+                        exp_name
+                        for exp_name, (src, orig) in parent_mod.imported_names.items()
+                        if resolve_module_name(parent_mod.name, src) == mod_name and orig == f.name
+                    ]
+                    
+                    if not is_star_imported and not explicit_exposed_names:
+                        f.is_unexposed = True
+                    else:
+                        f.is_unexposed = False
+                        if parent_mod.declared_all is not None:
+                            exposed_names = []
+                            if is_star_imported:
+                                exposed_names.append(f.name)
+                            exposed_names.extend(explicit_exposed_names)
+                            
+                            if not any(name in parent_mod.declared_all for name in exposed_names):
+                                f.missing_from_all = True

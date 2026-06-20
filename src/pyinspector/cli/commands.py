@@ -1,6 +1,7 @@
 import os
 import sys
 import click
+from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 from ..env import temp_env
@@ -56,7 +57,8 @@ def inspect(package_spec, python, version, format, output, private, depth, no_bu
                 
                 keys = list(modules.keys())
                 primary_mod = keys[0]
-                spec_clean = os.path.basename(os.path.abspath(package_spec)) if os.path.exists(package_spec) else package_spec
+                spec_path = Path(package_spec)
+                spec_clean = spec_path.resolve().name if spec_path.exists() else package_spec
                 name_clean = spec_clean.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
                 for k in keys:
                     if k.lower() == name_clean:
@@ -111,7 +113,8 @@ def search(package_spec, query, python, private, no_build_isolation):
                 
                 keys = list(modules.keys())
                 primary_mod = keys[0]
-                spec_clean = os.path.basename(os.path.abspath(package_spec)) if os.path.exists(package_spec) else package_spec
+                spec_path = Path(package_spec)
+                spec_clean = spec_path.resolve().name if spec_path.exists() else package_spec
                 name_clean = spec_clean.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
                 for k in keys:
                     if k.lower() == name_clean:
@@ -183,7 +186,7 @@ def compare(package_name, version_a, version_b, python, no_build_isolation):
     VERSION_B: Version string (e.g. 2.32.3) or path to local package version.
     """
     def construct_spec(name, ver):
-        if os.path.exists(ver):
+        if Path(ver).exists():
             return ver
         return f"{name}=={ver}"
         
@@ -252,7 +255,8 @@ def oop(package_spec, python, format, include_external, no_composition, no_build
                 
                 keys = list(modules.keys())
                 primary_mod = keys[0]
-                spec_clean = os.path.basename(os.path.abspath(package_spec)) if os.path.exists(package_spec) else package_spec
+                spec_path = Path(package_spec)
+                spec_clean = spec_path.resolve().name if spec_path.exists() else package_spec
                 name_clean = spec_clean.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
                 for k in keys:
                     if k.lower() == name_clean:
@@ -300,7 +304,8 @@ def functions(package_spec, python, private, depth, no_build_isolation):
                 
                 keys = list(modules.keys())
                 primary_mod = keys[0]
-                spec_clean = os.path.basename(os.path.abspath(package_spec)) if os.path.exists(package_spec) else package_spec
+                spec_path = Path(package_spec)
+                spec_clean = spec_path.resolve().name if spec_path.exists() else package_spec
                 name_clean = spec_clean.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
                 for k in keys:
                     if k.lower() == name_clean:
