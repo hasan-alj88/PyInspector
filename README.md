@@ -13,6 +13,8 @@
 * **Symlink & Cycle Detection**: Traverses symlinks safely with canonical path tracking (`os.path.realpath`). Detects recursive loops or duplicate modules, short-circuiting traversal and labeling loops clearly in outputs.
 * **Visual ASCII Tree**: Prints gorgeous color-coded Unicode/ASCII trees of package APIs using `rich`. Also supports exports to **JSON** and **YAML**.
 * **OOP UML Relations Mapping**: Map inheritance and composition hierarchies starting from the root `object`, regardless of module file placement. Extracts class properties/attributes (via `__init__` and `@property`/`@cached_property` getters) along with their type hints. Exports to ASCII tree, Mermaid class diagram, and Rich tables.
+* **UV Conflict & Metadata Integration**: Runs `uv pip check` to detect and alert on dependency conflicts. Displays resolved PyPI package metadata cards and full dependency trees via `uv tree` on standard inspections.
+* **Internal Imports & Cycle Detection**: Maps out local module import dependencies dynamically and checks for circular import cycles (rendered with bold red labels inline in the tree output).
 
 ---
 
@@ -32,7 +34,7 @@ You can now run commands using `uv run pyinspector` or run the CLI globally by b
 
 ## 📖 CLI Command Manual
 
-PyInspector provides five primary commands: `inspect`, `search`, `compare`, `oop`, and `functions`.
+PyInspector provides six primary commands: `inspect`, `search`, `compare`, `oop`, `functions`, and `imports`.
 
 ### 1. `inspect`
 Statically inspects a package and visualizes its structure.
@@ -139,6 +141,25 @@ uv run pyinspector functions <package_spec> [options]
 **Example**:
 ```bash
 uv run pyinspector functions requests --private
+```
+
+---
+
+### 6. `imports`
+Visualizes the internal module import tree of a package and highlights any circular dependency loops.
+
+**Syntax**:
+```bash
+uv run pyinspector imports <package_spec> [options]
+```
+
+* **`package_spec`**: PyPI package name, spec, or local directory path.
+* **`--python TEXT`**: Specific Python version constraint.
+* **`--no-build-isolation`**: Disables build isolation when installing local packages.
+
+**Example**:
+```bash
+uv run pyinspector imports .
 ```
 
 ---

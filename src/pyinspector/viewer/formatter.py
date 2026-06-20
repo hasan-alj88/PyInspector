@@ -5,6 +5,7 @@ from rich.tree import Tree
 from rich.table import Table
 from rich.text import Text
 from rich.console import Console
+from rich.panel import Panel
 from ..analyzer import PackageInfo, ModuleInfo, ClassInfo, FunctionInfo, OOPClassNode
 
 def build_module_trie(pkg_info: PackageInfo) -> Dict[str, Any]:
@@ -132,6 +133,26 @@ def render_rich_tree(pkg_info: PackageInfo, show_private: bool = False, max_dept
     """Prints a beautiful colored tree of the package API using Rich."""
     console = Console()
     
+    # Render Metadata if present
+    metadata_lines = []
+    if getattr(pkg_info, "version", None):
+        metadata_lines.append(f"[bold]Version:[/bold] {pkg_info.version}")
+    if getattr(pkg_info, "author", None):
+        metadata_lines.append(f"[bold]Author:[/bold] {pkg_info.author}")
+    if getattr(pkg_info, "homepage", None):
+        metadata_lines.append(f"[bold]Homepage:[/bold] {pkg_info.homepage}")
+    if getattr(pkg_info, "summary", None):
+        metadata_lines.append(f"[bold]Summary:[/bold] {pkg_info.summary}")
+    
+    if metadata_lines:
+        console.print(Panel(
+            "\n".join(metadata_lines),
+            title=f"[bold cyan]Package Metadata: {pkg_info.name}[/bold cyan]",
+            border_style="cyan",
+            expand=False
+        ))
+        console.print()
+    
     trie = build_module_trie(pkg_info)
     
     root_label = Text(f"📦 {pkg_info.name}", style="bold yellow")
@@ -141,6 +162,16 @@ def render_rich_tree(pkg_info: PackageInfo, show_private: bool = False, max_dept
     add_trie_to_tree(trie, tree, 1, max_depth, show_private)
     
     console.print(tree)
+    
+    # Render dependency tree if present
+    if getattr(pkg_info, "dependency_tree", None):
+        console.print()
+        console.print(Panel(
+            pkg_info.dependency_tree.strip(),
+            title="[bold green]Resolved Dependency Tree (uv tree)[/bold green]",
+            border_style="green",
+            expand=False
+        ))
 
 def package_to_dict(pkg_info: PackageInfo, show_private: bool) -> Dict[str, Any]:
     """Converts PackageInfo to a clean dict for export."""
@@ -575,4 +606,58 @@ def render_functions_tree(pkg_info: PackageInfo, show_private: bool = False, max
     tree = Tree(root_label)
     add_functions_trie_to_tree(trie, tree, 1, max_depth, show_private)
     
+    console.print(tree)
+
+def render_imports_tree(pkg_info: PackageInfo):
+    """Prints a tree representing the local module imports and highlights circular import cycles."""
+    console = Console()
+    from ..analyzer import find_import_cycles, get_local_imports
+    
+    cycles = find_import_cycles(pkg_info)
+    if cycles:
+        cycle_lines = []
+        for cycle in cycles:
+            cycle_lines.append(" ➔ ".join(cycle))
+        console.print(Panel(
+            "\n".join(cycle_lines),
+            title="[bold red]⚠️  Circular Import Loop(s) Detected![/bold red]",
+            border_style="red"
+        ))
+        console.print()
+        
+    pkg_modules = set(pkg_info.modules.keys())
+    
+    root_label = Text(f"📦 {pkg_info.name} (Imports Map)", style="bold yellow")
+    tree = Tree(root_label)
+    
+    for mod_name in sorted(pkg_info.modules.keys()):
+        mod = pkg_info.modules[mod_name]
+        if mod.is_recursive:
+            continue
+            
+        mod_label = Text(f"{mod_name}", style="bold blue")
+        if mod.relative_path:
+            mod_label.append(f" ({mod.relative_path})", style="dim white")
+            
+        branch = tree.add(mod_label)
+        
+        local_deps = get_local_imports(mod_name, mod, pkg_modules)
+        for dep in sorted(local_deps):
+            is_in_cycle = False
+            for cycle in cycles:
+                if mod_name in cycle:
+                    idx = cycle.index(mod_name)
+                    if idx < len(cycle) - 1 and cycle[idx + 1] == dep:
+                        is_in_cycle = True
+                        break
+            
+            dep_label = Text("➔ imports ", style="dim white")
+            if is_in_cycle:
+                dep_label.append(dep, style="bold red")
+                dep_label.append(" ⚠️  (circular loop)", style="italic red")
+            else:
+                dep_label.append(dep, style="green")
+                
+            branch.add(dep_label)
+            
     console.print(tree)

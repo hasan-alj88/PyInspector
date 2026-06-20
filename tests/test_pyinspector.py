@@ -561,5 +561,68 @@ class StarClass:
         finally:
             shutil.rmtree(temp_pkg, ignore_errors=True)
 
+    def test_import_cycles(self):
+        """Test circular import cycle detection and the imports CLI subcommand output."""
+        import tempfile
+        import shutil
+        import io
+        from contextlib import redirect_stdout
+        from pyinspector.analyzer.parser import analyze_package, find_import_cycles
+        
+        temp_pkg = tempfile.mkdtemp(prefix="pyinspector-test-imports-")
+        try:
+            with open(os.path.join(temp_pkg, "pyproject.toml"), "w") as f:
+                f.write("""
+[project]
+name = "testpkg"
+version = "0.1.0"
+""")
+            os.makedirs(os.path.join(temp_pkg, "testpkg"))
+            with open(os.path.join(temp_pkg, "testpkg", "__init__.py"), "w") as f:
+                f.write("# pkg\n")
+            with open(os.path.join(temp_pkg, "testpkg", "a.py"), "w") as f:
+                f.write("import testpkg.b\n")
+            with open(os.path.join(temp_pkg, "testpkg", "b.py"), "w") as f:
+                f.write("from .c import C\n")
+            with open(os.path.join(temp_pkg, "testpkg", "c.py"), "w") as f:
+                f.write("import testpkg.a\nclass C: pass\n")
+
+            pkg_info = analyze_package("testpkg", os.path.join(temp_pkg, "testpkg"))
+            cycles = find_import_cycles(pkg_info)
+            self.assertEqual(len(cycles), 1)
+            self.assertEqual(cycles[0], ["testpkg.a", "testpkg.b", "testpkg.c", "testpkg.a"])
+
+            # Test imports command output via CLI runner
+            result = self.runner.invoke(cli, ["imports", temp_pkg])
+            self.assertEqual(result.exit_code, 0)
+            self.assertIn("Circular Import Loop(s) Detected", result.output)
+            self.assertIn("testpkg.a ➔ testpkg.b ➔ testpkg.c ➔ testpkg.a", result.output)
+            self.assertIn("testpkg.a", result.output)
+            self.assertIn("➔ imports testpkg.b ⚠️  (circular loop)", result.output)
+            
+        finally:
+            shutil.rmtree(temp_pkg, ignore_errors=True)
+
+    def test_package_metadata_and_deps(self):
+        """Test that package metadata and dependencies from uv show/tree are correctly populated on PackageInfo."""
+        from pyinspector.env import temp_env
+        from pyinspector.analyzer.parser import analyze_package
+        
+        # scipy is installed with version constraint, it resolves metadata and dependency trees
+        with temp_env("scipy==1.10.0", python_version="3.11") as modules:
+            self.assertIn("scipy", modules)
+            pkg_path = modules["scipy"]
+            pkg_info = analyze_package("scipy", pkg_path)
+            
+            # Populate metadata
+            from pyinspector.cli.commands import populate_metadata
+            populate_metadata(pkg_info, modules)
+            
+            # Assert metadata fields from EnvResult subclass are on PackageInfo
+            self.assertEqual(pkg_info.version, "1.10.0")
+            self.assertTrue(any("numpy" in d.lower() for d in pkg_info.dependencies))
+            self.assertIsNotNone(pkg_info.dependency_tree)
+            self.assertIn("numpy", pkg_info.dependency_tree.lower())
+
 if __name__ == "__main__":
     unittest.main()

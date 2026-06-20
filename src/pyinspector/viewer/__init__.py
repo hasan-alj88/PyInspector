@@ -5,7 +5,8 @@ from .formatter import (
     render_oop_tree,
     render_oop_mermaid,
     render_oop_table,
-    render_functions_tree
+    render_functions_tree,
+    render_imports_tree
 )
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "render_oop_tree",
     "render_oop_mermaid",
     "render_oop_table",
-    "render_functions_tree"
+    "render_functions_tree",
+    "render_imports_tree"
 ]

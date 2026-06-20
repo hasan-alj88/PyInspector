@@ -3,7 +3,9 @@ from .parser import (
     ClassInfo,
     ModuleInfo,
     PackageInfo,
-    analyze_package
+    analyze_package,
+    find_import_cycles,
+    get_local_imports
 )
 from .oop import OOPClassNode, build_oop_graph
 
@@ -14,5 +16,7 @@ __all__ = [
     "PackageInfo",
     "analyze_package",
     "OOPClassNode",
-    "build_oop_graph"
+    "build_oop_graph",
+    "find_import_cycles",
+    "get_local_imports"
 ]

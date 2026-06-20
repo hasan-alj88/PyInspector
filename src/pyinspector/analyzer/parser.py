@@ -53,6 +53,12 @@ class PackageInfo:
     name: str
     path: str
     modules: Dict[str, ModuleInfo] = field(default_factory=dict)
+    version: Optional[str] = None
+    summary: Optional[str] = None
+    homepage: Optional[str] = None
+    author: Optional[str] = None
+    dependencies: List[str] = field(default_factory=list)
+    dependency_tree: Optional[str] = None
 
 def get_signature_func(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     """Extracts the function signature string via ast.unparse."""
@@ -596,3 +602,101 @@ def check_api_exposure(pkg: PackageInfo):
                             
                             if not any(name in parent_mod.declared_all for name in exposed_names):
                                 f.missing_from_all = True
+
+def get_local_imports(mod_name: str, mod_info: ModuleInfo, pkg_modules: set[str]) -> set[str]:
+    """Helper to resolve imports and return only internal local modules in the package."""
+    def resolve_module_name(parent_name: str, module_src: Optional[str]) -> str:
+        if not module_src:
+            return ""
+        if module_src.startswith("."):
+            level = 0
+            for char in module_src:
+                if char == '.':
+                    level += 1
+                else:
+                    break
+            sub_name = module_src[level:]
+            parts = parent_name.split(".")
+            if level > len(parts):
+                return sub_name
+            base_parts = parts[:len(parts) - (level - 1)]
+            if sub_name:
+                return ".".join(base_parts + [sub_name])
+            else:
+                return ".".join(base_parts)
+        else:
+            return module_src
+
+    if mod_info.relative_path.endswith(("__init__.py", "__init__.pyi")):
+        parent_package_name = mod_name
+    else:
+        parts = mod_name.split(".")
+        parent_package_name = ".".join(parts[:-1]) if len(parts) > 1 else mod_name
+
+    local_imports = set()
+    
+    # 1. Explicit imports
+    for exposed_name, (src, orig) in mod_info.imported_names.items():
+        if src is None:
+            target = orig
+        else:
+            resolved_src = resolve_module_name(parent_package_name, src)
+            target = f"{resolved_src}.{orig}"
+            if resolved_src in pkg_modules:
+                local_imports.add(resolved_src)
+                continue
+                
+        if target in pkg_modules:
+            local_imports.add(target)
+        else:
+            if "." in target:
+                parent_target = ".".join(target.split(".")[:-1])
+                if parent_target in pkg_modules:
+                    local_imports.add(parent_target)
+                    
+    # 2. Star imports
+    for src in mod_info.star_imports:
+        resolved_src = resolve_module_name(parent_package_name, src)
+        if resolved_src in pkg_modules:
+            local_imports.add(resolved_src)
+            
+    local_imports.discard(mod_name)
+    return local_imports
+
+def find_import_cycles(pkg_info: PackageInfo) -> List[List[str]]:
+    """Runs a DFS-based circular import loop detection on all modules."""
+    pkg_modules = set(pkg_info.modules.keys())
+    adj = {}
+    for name, mod in pkg_info.modules.items():
+        if mod.is_recursive:
+            continue
+        adj[name] = get_local_imports(name, mod, pkg_modules)
+        
+    cycles = []
+    state = {}  # mod_name -> "visiting" or "visited"
+    parent = {}
+
+    def dfs(u):
+        state[u] = "visiting"
+        for v in sorted(adj.get(u, [])):
+            if state.get(v) == "visiting":
+                # Cycle detected, reconstruct path
+                cycle = [v]
+                curr = u
+                while curr != v and curr in parent:
+                    cycle.append(curr)
+                    curr = parent[curr]
+                cycle.append(v)
+                cycle.reverse()
+                cycles.append(cycle)
+            elif v not in state:
+                parent[v] = u
+                dfs(v)
+        state[u] = "visited"
+
+    for node in sorted(adj.keys()):
+        if node not in state:
+            parent[node] = None
+            dfs(node)
+
+    return cycles

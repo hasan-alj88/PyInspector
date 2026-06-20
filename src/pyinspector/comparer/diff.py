@@ -36,6 +36,10 @@ class DiffResult:
     added_methods: List[str] = field(default_factory=list)
     removed_methods: List[str] = field(default_factory=list)
     modified_methods: Dict[str, Tuple[str, str]] = field(default_factory=dict)
+    
+    # Dependencies level
+    added_dependencies: List[str] = field(default_factory=list)
+    removed_dependencies: List[str] = field(default_factory=list)
 
 def get_local_requires_python(path: str) -> Optional[str]:
     """Statically reads requires-python from pyproject.toml if path is a local folder."""
@@ -151,6 +155,12 @@ def compare_packages(pkg_a: PackageInfo, pkg_b: PackageInfo, version_a: str, ver
     diff.added_methods.sort()
     diff.removed_methods.sort()
     
+    # Compare dependencies
+    deps_a = set(pkg_a.dependencies) if pkg_a.dependencies else set()
+    deps_b = set(pkg_b.dependencies) if pkg_b.dependencies else set()
+    diff.added_dependencies = sorted(list(deps_b - deps_a))
+    diff.removed_dependencies = sorted(list(deps_a - deps_b))
+    
     return diff
 
 def render_comparison(diff: DiffResult):
@@ -241,3 +251,14 @@ def render_comparison(diff: DiffResult):
     
     if not has_changes and not diff.modified_functions and not diff.modified_methods:
         console.print("[bold green]No API structural changes detected between these two versions.[/bold green]")
+        
+    if diff.added_dependencies or diff.removed_dependencies:
+        dep_table = Table(title="Dependency Package Changes", show_header=True, header_style="bold blue")
+        dep_table.add_column("Change Type", style="bold")
+        dep_table.add_column("Dependency Package Name", style="white")
+        for dep in diff.added_dependencies:
+            dep_table.add_row("[green]Added Dependency[/green]", dep)
+        for dep in diff.removed_dependencies:
+            dep_table.add_row("[red]Removed Dependency[/red]", dep)
+        console.print(dep_table)
+        console.print()

@@ -13,11 +13,20 @@ from ..viewer import (
     render_oop_tree,
     render_oop_mermaid,
     render_oop_table,
-    render_functions_tree
+    render_functions_tree,
+    render_imports_tree
 )
 from ..comparer import compare_packages, render_comparison
 
 console = Console()
+
+def populate_metadata(pkg_info, modules):
+    pkg_info.version = getattr(modules, "version", None)
+    pkg_info.summary = getattr(modules, "summary", None)
+    pkg_info.homepage = getattr(modules, "homepage", None)
+    pkg_info.author = getattr(modules, "author", None)
+    pkg_info.dependencies = getattr(modules, "dependencies", [])
+    pkg_info.dependency_tree = getattr(modules, "dependency_tree", None)
 
 @click.group()
 def cli():
@@ -67,6 +76,7 @@ def inspect(package_spec, python, version, format, output, private, depth, no_bu
                         
                 pkg_path = modules[primary_mod]
                 pkg_info = analyze_package(primary_mod, pkg_path)
+                populate_metadata(pkg_info, modules)
                 
         if format == "tree":
             render_rich_tree(pkg_info, show_private=private, max_depth=depth)
@@ -123,6 +133,7 @@ def search(package_spec, query, python, private, no_build_isolation):
                         
                 pkg_path = modules[primary_mod]
                 pkg_info = analyze_package(primary_mod, pkg_path)
+                populate_metadata(pkg_info, modules)
                 
         results = []
         query_lower = query.lower()
@@ -210,6 +221,7 @@ def compare(package_name, version_a, version_b, python, no_build_isolation):
                         primary_mod = k
                         break
                 pkg_info_a = analyze_package(primary_mod, modules_a[primary_mod])
+                populate_metadata(pkg_info_a, modules_a)
                 
         with console.status(f"[bold green]Analyzing Version B ({spec_b})...[/bold green]"):
             with temp_env(spec_b, python_version=python, no_build_isolation=no_build_isolation) as modules_b:
@@ -224,6 +236,7 @@ def compare(package_name, version_a, version_b, python, no_build_isolation):
                         primary_mod = k
                         break
                 pkg_info_b = analyze_package(primary_mod, modules_b[primary_mod])
+                populate_metadata(pkg_info_b, modules_b)
                 
         diff = compare_packages(pkg_info_a, pkg_info_b, version_a, version_b)
         render_comparison(diff)
@@ -265,6 +278,7 @@ def oop(package_spec, python, format, include_external, no_composition, no_build
                         
                 pkg_path = modules[primary_mod]
                 pkg_info = analyze_package(primary_mod, pkg_path)
+                populate_metadata(pkg_info, modules)
                 
         # Build OOP graph
         root_node = build_oop_graph(pkg_info, include_external=include_external)
@@ -314,9 +328,47 @@ def functions(package_spec, python, private, depth, no_build_isolation):
                         
                 pkg_path = modules[primary_mod]
                 pkg_info = analyze_package(primary_mod, pkg_path)
+                populate_metadata(pkg_info, modules)
                 
         render_functions_tree(pkg_info, show_private=private, max_depth=depth)
             
     except Exception as e:
         console.print(f"[bold red]Error during functions exploration: {e}[/bold red]")
+        sys.exit(1)
+
+@cli.command()
+@click.argument("package_spec")
+@click.option("--python", default=None, help="Specific python version to use (e.g. 3.11).")
+@click.option("--no-build-isolation", is_flag=True, help="Disable build isolation when installing local packages.")
+def imports(package_spec, python, no_build_isolation):
+    """
+    Display a tree of local module imports and highlight circular cycles.
+    
+    PACKAGE_SPEC can be a PyPI package or local path.
+    """
+    try:
+        with console.status(f"[bold green]Setting up environment and analyzing {package_spec}...[/bold green]"):
+            with temp_env(package_spec, python_version=python, no_build_isolation=no_build_isolation) as modules:
+                if not modules:
+                    console.print(f"[bold red]Error: No modules could be resolved for package spec '{package_spec}'.[/bold red]")
+                    sys.exit(1)
+                
+                keys = list(modules.keys())
+                primary_mod = keys[0]
+                spec_path = Path(package_spec)
+                spec_clean = spec_path.resolve().name if spec_path.exists() else package_spec
+                name_clean = spec_clean.split("=")[0].split(">")[0].split("<")[0].strip().replace("-", "_").lower()
+                for k in keys:
+                    if k.lower() == name_clean:
+                        primary_mod = k
+                        break
+                        
+                pkg_path = modules[primary_mod]
+                pkg_info = analyze_package(primary_mod, pkg_path)
+                populate_metadata(pkg_info, modules)
+                
+        render_imports_tree(pkg_info)
+            
+    except Exception as e:
+        console.print(f"[bold red]Error during imports exploration: {e}[/bold red]")
         sys.exit(1)
