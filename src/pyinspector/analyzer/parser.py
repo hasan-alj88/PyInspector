@@ -14,6 +14,12 @@ class FunctionInfo:
     is_method: bool = False
 
 @dataclass
+class PropertyInfo:
+    name: str
+    type_hint: Optional[str]
+    source: str  # "init" or "property"
+
+@dataclass
 class ClassInfo:
     name: str
     signature: str
@@ -21,6 +27,7 @@ class ClassInfo:
     methods: List[FunctionInfo] = field(default_factory=list)
     bases: List[str] = field(default_factory=list)
     composes: Dict[str, str] = field(default_factory=dict)
+    properties: List[PropertyInfo] = field(default_factory=list)
 
 @dataclass
 class ModuleInfo:
@@ -118,6 +125,80 @@ def extract_composition(class_node: ast.ClassDef) -> Dict[str, str]:
                             
     return composes
 
+def extract_properties(class_node: ast.ClassDef) -> List[PropertyInfo]:
+    """Statically identifies class properties/attributes (via init and @property)."""
+    properties = []
+    
+    # 1. Properties via @property and @cached_property getters
+    for child in class_node.body:
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            is_prop = False
+            for dec in child.decorator_list:
+                if isinstance(dec, ast.Name) and dec.id in ("property", "cached_property"):
+                    is_prop = True
+                elif isinstance(dec, ast.Attribute) and dec.attr in ("property", "cached_property"):
+                    is_prop = True
+            
+            if is_prop:
+                type_hint = None
+                if child.returns:
+                    type_hint = ast.unparse(child.returns)
+                properties.append(PropertyInfo(
+                    name=child.name,
+                    type_hint=type_hint,
+                    source="property"
+                ))
+
+    # Helper to clean/unparse types
+    def get_type_name(expr_node) -> Optional[str]:
+        try:
+            return ast.unparse(expr_node)
+        except Exception:
+            return None
+
+    # 2. Properties via class-level attributes & init constructor assignments
+    init_props = {}
+    
+    # 2a. Class-level annotations & assignments (source="class")
+    for child in class_node.body:
+        if isinstance(child, ast.AnnAssign):
+            if isinstance(child.target, ast.Name):
+                name = child.target.id
+                t_hint = get_type_name(child.annotation)
+                init_props[name] = (t_hint, "class")
+        elif isinstance(child, ast.Assign):
+            for target in child.targets:
+                if isinstance(target, ast.Name):
+                    name = target.id
+                    init_props[name] = (None, "class")
+
+    # 2b. Constructor assignments (source="init")
+    for child in class_node.body:
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == "__init__":
+            for sub_node in ast.walk(child):
+                # self.x: T = ... or self.x: T
+                if isinstance(sub_node, ast.AnnAssign):
+                    if isinstance(sub_node.target, ast.Attribute) and isinstance(sub_node.target.value, ast.Name) and sub_node.target.value.id == "self":
+                        name = sub_node.target.attr
+                        t_hint = get_type_name(sub_node.annotation)
+                        init_props[name] = (t_hint, "init")
+                # self.x = ...
+                elif isinstance(sub_node, ast.Assign):
+                    for target in sub_node.targets:
+                        if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self":
+                            name = target.attr
+                            if name not in init_props or init_props[name][0] is None:
+                                init_props[name] = (None, "init")
+                                
+    for name, (t_hint, source) in init_props.items():
+        properties.append(PropertyInfo(
+            name=name,
+            type_hint=t_hint,
+            source=source
+        ))
+        
+    return properties
+
 def parse_file(file_path: str, module_name: str) -> ModuleInfo:
     """Statically parses a single python file and extracts all its classes and functions."""
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -139,6 +220,7 @@ def parse_file(file_path: str, module_name: str) -> ModuleInfo:
             class_sig = get_signature_class(node)
             bases = [ast.unparse(b) for b in node.bases]
             composes = extract_composition(node)
+            properties = extract_properties(node)
             
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -159,7 +241,8 @@ def parse_file(file_path: str, module_name: str) -> ModuleInfo:
                 docstring=class_doc,
                 methods=methods,
                 bases=bases,
-                composes=composes
+                composes=composes,
+                properties=properties
             ))
             
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -201,7 +284,7 @@ def analyze_package(package_name: str, package_path: str) -> PackageInfo:
         return ".".join(parts)
 
     if os.path.isfile(package_path):
-        if package_path.endswith(".py"):
+        if package_path.endswith((".py", ".pyi")):
             canonical_path = os.path.realpath(package_path)
             visited_paths[canonical_path] = package_name
             mod_info = parse_file(package_path, package_name)
@@ -210,6 +293,7 @@ def analyze_package(package_name: str, package_path: str) -> PackageInfo:
             
     elif os.path.isdir(package_path):
         visited_paths[os.path.realpath(package_path)] = package_name
+        candidate_files = {}
         
         for root, dirs, files in os.walk(package_path, followlinks=True):
             # 1. Clean directories & check for folder loops
@@ -236,27 +320,35 @@ def analyze_package(package_name: str, package_path: str) -> PackageInfo:
                     remaining_dirs.append(d)
             dirs[:] = remaining_dirs
             
-            # 2. Process files & check for file loops/duplicates
+            # 2. Collect candidate files
             for file in files:
-                if file.endswith(".py"):
+                if file.endswith((".py", ".pyi")):
                     full_path = os.path.join(root, file)
-                    canonical_file = os.path.realpath(full_path)
                     file_mod_name = get_module_name(full_path)
-                    
                     if not file_mod_name:
                         continue
-                        
-                    if canonical_file in visited_paths:
-                        pkg.modules[file_mod_name] = ModuleInfo(
-                            name=file_mod_name,
-                            relative_path=os.path.relpath(full_path, package_path),
-                            is_recursive=True,
-                            points_to=visited_paths[canonical_file]
-                        )
+                    
+                    if file_mod_name not in candidate_files:
+                        candidate_files[file_mod_name] = full_path
                     else:
-                        visited_paths[canonical_file] = file_mod_name
-                        mod_info = parse_file(full_path, file_mod_name)
-                        mod_info.relative_path = os.path.relpath(full_path, package_path)
-                        pkg.modules[file_mod_name] = mod_info
+                        existing_path = candidate_files[file_mod_name]
+                        if file.endswith(".pyi") and existing_path.endswith(".py"):
+                            candidate_files[file_mod_name] = full_path
+
+        # 3. Process candidate files
+        for file_mod_name, full_path in sorted(candidate_files.items()):
+            canonical_file = os.path.realpath(full_path)
+            if canonical_file in visited_paths:
+                pkg.modules[file_mod_name] = ModuleInfo(
+                    name=file_mod_name,
+                    relative_path=os.path.relpath(full_path, package_path),
+                    is_recursive=True,
+                    points_to=visited_paths[canonical_file]
+                )
+            else:
+                visited_paths[canonical_file] = file_mod_name
+                mod_info = parse_file(full_path, file_mod_name)
+                mod_info.relative_path = os.path.relpath(full_path, package_path)
+                pkg.modules[file_mod_name] = mod_info
                         
     return pkg

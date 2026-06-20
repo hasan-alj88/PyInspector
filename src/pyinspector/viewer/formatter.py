@@ -192,7 +192,7 @@ def export_yaml(pkg_info: PackageInfo, show_private: bool = False) -> str:
     return yaml.dump(data, sort_keys=False)
 
 def render_oop_tree(root_node: OOPClassNode, show_composition: bool = True):
-    """Prints a beautiful colored ASCII tree of class inheritance and composition."""
+    """Prints a beautiful colored ASCII tree of class inheritance, composition, and properties."""
     console = Console()
     
     root_label = Text("Root ", style="dim white")
@@ -212,23 +212,54 @@ def render_oop_tree(root_node: OOPClassNode, show_composition: bool = True):
                 
             branch = tree_node.add(label)
             
-            # Add composition nodes if requested and present
+            # Add properties/attributes (including composition)
+            props_to_show = {}
+            if not sub.is_external and sub.class_info:
+                for prop in sub.class_info.properties:
+                    props_to_show[prop.name] = {
+                        "type_hint": prop.type_hint,
+                        "source": prop.source,
+                        "composes": None
+                    }
+                    
             if show_composition:
-                # Resolved composition
-                for attr in sorted(sub.resolved_composition.keys()):
-                    comp = sub.resolved_composition[attr]
-                    comp_label = Text("✦ composes ", style="dim green")
-                    comp_label.append(comp.name, style="bold cyan")
-                    comp_label.append(f" (as {attr})", style="dim white")
-                    branch.add(comp_label)
-                # External composition
-                for attr in sorted(sub.external_composition.keys()):
-                    ext_type = sub.external_composition[attr]
+                for attr, comp_node in sub.resolved_composition.items():
+                    if attr not in props_to_show:
+                        props_to_show[attr] = {
+                            "type_hint": comp_node.name,
+                            "source": "init",
+                            "composes": comp_node.name
+                        }
+                    else:
+                        props_to_show[attr]["composes"] = comp_node.name
+                        if not props_to_show[attr]["type_hint"]:
+                            props_to_show[attr]["type_hint"] = comp_node.name
+                            
+                for attr, ext_type in sub.external_composition.items():
                     clean_ext = ext_type.split(".")[-1]
-                    comp_label = Text("✦ composes ", style="dim green")
-                    comp_label.append(clean_ext, style="italic dim yellow")
-                    comp_label.append(f" (as {attr}, external)", style="dim white")
-                    branch.add(comp_label)
+                    if attr not in props_to_show:
+                        props_to_show[attr] = {
+                            "type_hint": clean_ext,
+                            "source": "init",
+                            "composes": clean_ext
+                        }
+                    else:
+                        props_to_show[attr]["composes"] = clean_ext
+                        if not props_to_show[attr]["type_hint"]:
+                            props_to_show[attr]["type_hint"] = clean_ext
+
+            for name in sorted(props_to_show.keys()):
+                info = props_to_show[name]
+                prop_label = Text("✦ property: ", style="dim yellow")
+                prop_label.append(name, style="bold white")
+                if info["type_hint"]:
+                    prop_label.append(f": {info['type_hint']}", style="cyan")
+                
+                suffix_parts = [f"via {info['source']}"]
+                if show_composition and info["composes"]:
+                    suffix_parts.append(f"composes {info['composes']}")
+                prop_label.append(f" ({', '.join(suffix_parts)})", style="italic dim white")
+                branch.add(prop_label)
             
             # Recurse
             add_node(sub, branch)
@@ -237,9 +268,10 @@ def render_oop_tree(root_node: OOPClassNode, show_composition: bool = True):
     console.print(tree)
 
 def render_oop_mermaid(root_node: OOPClassNode, show_composition: bool = True) -> str:
-    """Generates a Mermaid Class Diagram representing inheritance and composition."""
+    """Generates a Mermaid Class Diagram representing inheritance, composition, and properties."""
     inheritance_lines = []
     composition_lines = []
+    member_lines = []
     visited = set()
     
     def collect_relations(node: OOPClassNode):
@@ -261,6 +293,51 @@ def render_oop_mermaid(root_node: OOPClassNode, show_composition: bool = True) -
                 ext_type = node.external_composition[attr]
                 clean_ext = ext_type.split(".")[-1]
                 composition_lines.append(f"    {node.name} *-- {clean_ext} : {attr}")
+        
+        # Parse properties/composition for Mermaid
+        props_to_show = {}
+        if not node.is_external and node.class_info:
+            for prop in node.class_info.properties:
+                props_to_show[prop.name] = {
+                    "type_hint": prop.type_hint,
+                    "source": prop.source,
+                    "composes": None
+                }
+                
+        if show_composition:
+            for attr, comp_node in node.resolved_composition.items():
+                if attr not in props_to_show:
+                    props_to_show[attr] = {
+                        "type_hint": comp_node.name,
+                        "source": "init",
+                        "composes": comp_node.name
+                    }
+                else:
+                    props_to_show[attr]["composes"] = comp_node.name
+                    if not props_to_show[attr]["type_hint"]:
+                        props_to_show[attr]["type_hint"] = comp_node.name
+                        
+            for attr, ext_type in node.external_composition.items():
+                clean_ext = ext_type.split(".")[-1]
+                if attr not in props_to_show:
+                    props_to_show[attr] = {
+                        "type_hint": clean_ext,
+                        "source": "init",
+                        "composes": clean_ext
+                    }
+                else:
+                    props_to_show[attr]["composes"] = clean_ext
+                    if not props_to_show[attr]["type_hint"]:
+                        props_to_show[attr]["type_hint"] = clean_ext
+
+        for name in sorted(props_to_show.keys()):
+            info = props_to_show[name]
+            type_suffix = f" : {info['type_hint']}" if info['type_hint'] else ""
+            suffix_parts = [f"via {info['source']}"]
+            if show_composition and info["composes"]:
+                suffix_parts.append(f"composes {info['composes']}")
+            suffix = f" ({', '.join(suffix_parts)})"
+            member_lines.append(f"    {node.name} : +{name}{type_suffix}{suffix}")
                 
     collect_relations(root_node)
     
@@ -279,18 +356,24 @@ def render_oop_mermaid(root_node: OOPClassNode, show_composition: bool = True) -
             lines.append(line)
             seen_comp.add(line)
             
+    # Add member lines, deduplicated
+    seen_member = set()
+    for line in member_lines:
+        if line not in seen_member:
+            lines.append(line)
+            seen_member.add(line)
+            
     return "\n".join(lines)
 
 def render_oop_table(root_node: OOPClassNode, show_composition: bool = True):
-    """Prints a structured tabular report of the classes and their OOP relations."""
+    """Prints a structured tabular report of the classes, their OOP relations, and properties."""
     console = Console()
     
     table = Table(title="OOP Class Relationships Map", show_header=True, header_style="bold green")
     table.add_column("Class Name", style="bold cyan")
     table.add_column("Module Location", style="dim white")
     table.add_column("Inherits From (Bases)", style="magenta")
-    if show_composition:
-        table.add_column("Composes Attributes", style="green")
+    table.add_column("Properties (Attributes)", style="yellow")
         
     visited = set()
     rows = []
@@ -303,17 +386,57 @@ def render_oop_table(root_node: OOPClassNode, show_composition: bool = True):
         if not node.is_external and node.class_info:
             bases_str = ", ".join(node.class_info.bases) if node.class_info.bases else "object"
             
-            comp_list = []
+            # Collect properties & composition unified
+            props_to_show = {}
+            for prop in node.class_info.properties:
+                props_to_show[prop.name] = {
+                    "type_hint": prop.type_hint,
+                    "source": prop.source,
+                    "composes": None
+                }
+                
             if show_composition:
-                for attr, comp_node in sorted(node.resolved_composition.items()):
-                    comp_list.append(f"{attr}: {comp_node.name}")
-                for attr, ext_type in sorted(node.external_composition.items()):
+                for attr, comp_node in node.resolved_composition.items():
+                    if attr not in props_to_show:
+                        props_to_show[attr] = {
+                            "type_hint": comp_node.name,
+                            "source": "init",
+                            "composes": comp_node.name
+                        }
+                    else:
+                        props_to_show[attr]["composes"] = comp_node.name
+                        if not props_to_show[attr]["type_hint"]:
+                            props_to_show[attr]["type_hint"] = comp_node.name
+                            
+                for attr, ext_type in node.external_composition.items():
                     clean_ext = ext_type.split(".")[-1]
-                    comp_list.append(f"{attr}: {clean_ext}")
-                    
-            comp_str = ", ".join(comp_list) if comp_list else "-"
+                    if attr not in props_to_show:
+                        props_to_show[attr] = {
+                            "type_hint": clean_ext,
+                            "source": "init",
+                            "composes": clean_ext
+                        }
+                    else:
+                        props_to_show[attr]["composes"] = clean_ext
+                        if not props_to_show[attr]["type_hint"]:
+                            props_to_show[attr]["type_hint"] = clean_ext
+
+            # Format properties string
+            prop_list = []
+            for name in sorted(props_to_show.keys()):
+                info = props_to_show[name]
+                type_str = f": {info['type_hint']}" if info['type_hint'] else ""
+                
+                suffix_parts = [info['source']]
+                if show_composition and info['composes']:
+                    suffix_parts.append("composes")
+                suffix_str = ", ".join(suffix_parts)
+                
+                prop_list.append(f"{name}{type_str} ({suffix_str})")
+                
+            prop_str = ", ".join(prop_list) if prop_list else "-"
             
-            rows.append((node.name, node.module, bases_str, comp_str))
+            rows.append((node.name, node.module, bases_str, prop_str))
             
         for sub in node.subclasses:
             collect_rows(sub)
@@ -321,10 +444,7 @@ def render_oop_table(root_node: OOPClassNode, show_composition: bool = True):
     collect_rows(root_node)
     
     # Sort table rows alphabetically by class name
-    for name, module, bases, comp in sorted(rows, key=lambda x: x[0]):
-        if show_composition:
-            table.add_row(name, module, bases, comp)
-        else:
-            table.add_row(name, module, bases)
+    for name, module, bases, prop in sorted(rows, key=lambda x: x[0]):
+        table.add_row(name, module, bases, prop)
             
     console.print(table)

@@ -30,7 +30,8 @@ def cli():
 @click.option("--output", default=None, help="Save output to this file path.")
 @click.option("--private", is_flag=True, help="Include private and protected members (starting with '_').")
 @click.option("--depth", type=int, default=None, help="Limit tree rendering depth.")
-def inspect(package_spec, python, version, format, output, private, depth):
+@click.option("--no-build-isolation", is_flag=True, help="Disable build isolation when installing local packages.")
+def inspect(package_spec, python, version, format, output, private, depth, no_build_isolation):
     """
     Inspect the API structure of a package.
     
@@ -47,7 +48,7 @@ def inspect(package_spec, python, version, format, output, private, depth):
             
     try:
         with console.status(f"[bold green]Setting up environment and installing {package_spec}...[/bold green]"):
-            with temp_env(package_spec, python_version=python) as modules:
+            with temp_env(package_spec, python_version=python, no_build_isolation=no_build_isolation) as modules:
                 if not modules:
                     console.print(f"[bold red]Error: No modules could be resolved for package spec '{package_spec}'.[/bold red]")
                     sys.exit(1)
@@ -91,7 +92,8 @@ def inspect(package_spec, python, version, format, output, private, depth):
 @click.argument("query")
 @click.option("--python", default=None, help="Python version to use.")
 @click.option("--private", is_flag=True, help="Include private and protected members in search.")
-def search(package_spec, query, python, private):
+@click.option("--no-build-isolation", is_flag=True, help="Disable build isolation when installing local packages.")
+def search(package_spec, query, python, private, no_build_isolation):
     """
     Search for a class or function inside a package.
     
@@ -100,7 +102,7 @@ def search(package_spec, query, python, private):
     """
     try:
         with console.status(f"[bold green]Analyzing {package_spec}...[/bold green]"):
-            with temp_env(package_spec, python_version=python) as modules:
+            with temp_env(package_spec, python_version=python, no_build_isolation=no_build_isolation) as modules:
                 if not modules:
                     console.print(f"[bold red]Error: No modules resolved for '{package_spec}'.[/bold red]")
                     sys.exit(1)
@@ -168,7 +170,8 @@ def search(package_spec, query, python, private):
 @click.argument("version_a")
 @click.argument("version_b")
 @click.option("--python", default=None, help="Python version to use.")
-def compare(package_name, version_a, version_b, python):
+@click.option("--no-build-isolation", is_flag=True, help="Disable build isolation when installing local packages.")
+def compare(package_name, version_a, version_b, python, no_build_isolation):
     """
     Compare the API structure of two versions of a package.
     
@@ -189,7 +192,7 @@ def compare(package_name, version_a, version_b, python):
     
     try:
         with console.status(f"[bold green]Analyzing Version A ({spec_a})...[/bold green]"):
-            with temp_env(spec_a, python_version=python) as modules_a:
+            with temp_env(spec_a, python_version=python, no_build_isolation=no_build_isolation) as modules_a:
                 if not modules_a:
                     console.print(f"[bold red]Error: No modules resolved for Version A '{spec_a}'.[/bold red]")
                     sys.exit(1)
@@ -203,7 +206,7 @@ def compare(package_name, version_a, version_b, python):
                 pkg_info_a = analyze_package(primary_mod, modules_a[primary_mod])
                 
         with console.status(f"[bold green]Analyzing Version B ({spec_b})...[/bold green]"):
-            with temp_env(spec_b, python_version=python) as modules_b:
+            with temp_env(spec_b, python_version=python, no_build_isolation=no_build_isolation) as modules_b:
                 if not modules_b:
                     console.print(f"[bold red]Error: No modules resolved for Version B '{spec_b}'.[/bold red]")
                     sys.exit(1)
@@ -229,7 +232,8 @@ def compare(package_name, version_a, version_b, python):
 @click.option("--format", type=click.Choice(["tree", "mermaid", "table"]), default="tree", help="Visual format of OOP relationships.")
 @click.option("--include-external", is_flag=True, help="Include external parent classes.")
 @click.option("--no-composition", is_flag=True, help="Disable composition analysis.")
-def oop(package_spec, python, format, include_external, no_composition):
+@click.option("--no-build-isolation", is_flag=True, help="Disable build isolation when installing local packages.")
+def oop(package_spec, python, format, include_external, no_composition, no_build_isolation):
     """
     Map the OOP UML relationships (inheritance & composition) of a package.
     
@@ -238,7 +242,7 @@ def oop(package_spec, python, format, include_external, no_composition):
     """
     try:
         with console.status(f"[bold green]Setting up environment and analyzing {package_spec}...[/bold green]"):
-            with temp_env(package_spec, python_version=python) as modules:
+            with temp_env(package_spec, python_version=python, no_build_isolation=no_build_isolation) as modules:
                 if not modules:
                     console.print(f"[bold red]Error: No modules could be resolved for package spec '{package_spec}'.[/bold red]")
                     sys.exit(1)

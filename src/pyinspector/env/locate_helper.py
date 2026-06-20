@@ -14,17 +14,57 @@ def main():
     # Normalize package name (PyPI names use hyphens, Python imports use underscores)
     clean_name = target_name.split("==")[0].split(">=")[0].split("<=")[0].strip()
 
+    # 1. Set up sys.path and collect local modules for local checkouts
+    local_modules = []
+    if os.path.isdir(package_spec):
+        if package_spec not in sys.path:
+            sys.path.insert(0, package_spec)
+        src_dir = os.path.join(package_spec, "src")
+        if os.path.isdir(src_dir) and src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
+
+        # Scan root of package_spec for subdirectories with __init__.py or standalone python modules
+        try:
+            for entry in os.listdir(package_spec):
+                entry_path = os.path.join(package_spec, entry)
+                if os.path.isdir(entry_path):
+                    if entry != ".venv" and not entry.startswith(".") and os.path.exists(os.path.join(entry_path, "__init__.py")):
+                        local_modules.append(entry)
+                elif os.path.isfile(entry_path) and entry.endswith(".py"):
+                    base = entry[:-3]
+                    if base not in ("setup", "conftest", "noxfile", "tox", "tasks", "test", "tests"):
+                        local_modules.append(base)
+        except Exception:
+            pass
+
+        # Scan src/ of package_spec for package subdirectories
+        if os.path.isdir(src_dir):
+            try:
+                for entry in os.listdir(src_dir):
+                    entry_path = os.path.join(src_dir, entry)
+                    if os.path.isdir(entry_path):
+                        if not entry.startswith(".") and os.path.exists(os.path.join(entry_path, "__init__.py")):
+                            local_modules.append(entry)
+            except Exception:
+                pass
+    elif os.path.isfile(package_spec) and package_spec.endswith(".py"):
+        parent = os.path.dirname(os.path.abspath(package_spec))
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
+        base = os.path.basename(package_spec)[:-3]
+        local_modules.append(base)
+
     dists = list(importlib.metadata.distributions())
     dist = None
 
-    # 1. Match by name case-insensitively
+    # 2. Match by name case-insensitively
     for d in dists:
         name = d.metadata['Name']
         if name and name.lower() == clean_name.lower().replace('_', '-'):
             dist = d
             break
 
-    # 2. Match by path (for local installs)
+    # 3. Match by path (for local installs)
     if not dist and os.path.exists(package_spec):
         for d in dists:
             name = d.metadata['Name']
@@ -32,7 +72,7 @@ def main():
                 dist = d
                 break
 
-    # If still not found, search for any user-installed distribution
+    # 4. If still not found, search for any user-installed distribution
     if not dist:
         standard_libs = {'pip', 'setuptools', 'wheel', 'uv', 'hatchling'}
         user_dists = [d for d in dists if d.metadata['Name'] and d.metadata['Name'].lower() not in standard_libs]
@@ -52,6 +92,8 @@ def main():
                         modules.append(parts[0])
         modules.append(dist.metadata['Name'])
     else:
+        if local_modules:
+            modules.extend(local_modules)
         modules.append(clean_name)
 
     modules = list(set(modules))
